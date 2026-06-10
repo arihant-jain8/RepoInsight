@@ -28,6 +28,7 @@ st.sidebar.title("🔬 Engineering Copilot")
 st.sidebar.caption("Pick a role-based view above, or browse the overview here.")
 
 ui.require_db()
+ui.llm_badge()
 
 st.title("Executive Overview")
 st.caption(f"Org-wide engineering intelligence · central DB `{config.DB_PATH}`")

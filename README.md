@@ -91,7 +91,7 @@ Then open **http://localhost:8501** in your browser. (Streamlit usually opens it
 
 ## Using the dashboard
 
-The sidebar lists four views:
+The sidebar lists these views:
 
 | View | Audience | What it shows |
 |---|---|---|
@@ -99,6 +99,17 @@ The sidebar lists four views:
 | **🏢 Unit Head** | Non-technical, org-wide | Code-quality bars with team size, punctuality, customer-reported errors |
 | **📋 Project Manager** | One project | Module risk, major/minor review comments, **customer issue → commit traceability** |
 | **🛠️ Team Lead** | One module | Per-commit drill-down, trend charts, reviewer load, commits behind customer issues |
+| **📝 AI Reports** | Any | Generate a role-aware report for a module / project / org, and download it as Markdown |
+| **💬 Management Copilot** | Any | Natural-language chat grounded in the org data |
+
+Each role page also has an inline **🧠 Generate AI insight** button that writes a
+report for that page's data, right next to its charts.
+
+### AI behaviour (works with or without a model)
+
+The AI features are **stub-first**: with no model running, every AI surface falls back
+to a deterministic, data-driven summary (the sidebar shows `LLM: ⚪ offline`). Start a
+local model (below) and the same buttons produce real generated prose (`LLM: 🟢 connected`).
 
 ---
 
@@ -107,10 +118,12 @@ The sidebar lists four views:
 ```
 RepoInsight/
 ├── app.py                  # Streamlit entrypoint (Executive Overview)
-├── pages/                  # role-based Streamlit views
+├── pages/                  # Streamlit views
 │   ├── 01_unit_head.py
 │   ├── 02_project_manager.py
-│   └── 03_team_lead.py
+│   ├── 03_team_lead.py
+│   ├── 04_reports.py       # AI reports (scope + role selector, export)
+│   └── 05_copilot.py       # management copilot chat
 ├── src/                    # core logic (importable modules)
 │   ├── config.py           # central DB path + pluggable LLM settings
 │   ├── database.py         # SQLite connection + query helpers
@@ -118,7 +131,9 @@ RepoInsight/
 │   ├── generate_data.py    # seed the central engineering.db (run once)
 │   ├── analytics.py        # metric computation (health, trends, punctuality, ...)
 │   ├── risk_engine.py      # GREEN/AMBER/RED risk scoring per module
-│   └── ui.py               # shared risk colors + cached loaders
+│   ├── llm_service.py      # pluggable LLM client + data-driven fallback
+│   ├── prompts/            # report.txt, copilot.txt
+│   └── ui.py               # risk colors, cached loaders, AI insight widget
 ├── data/engineering.db     # generated SQLite database
 ├── docs/
 │   ├── Engineering_Intelligence_Plan.md   # full design doc

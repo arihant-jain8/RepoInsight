@@ -18,11 +18,13 @@ import streamlit as st
 
 import analytics
 import database
+import llm_service
 import risk_engine
 import ui
 
 st.set_page_config(page_title="Team Lead", page_icon="🛠️", layout="wide")
 ui.require_db()
+ui.llm_badge()
 
 st.title("🛠️ Team Lead — Module Deep Dive")
 st.caption("Most technical view: per-commit detail and quality signals.")
@@ -54,6 +56,15 @@ st.caption(f"Window: last {health['window_weeks']} weeks · "
            f"minor {health['minor_comments']} · "
            f"unreviewed {health['unreviewed_pct']}% · "
            f"clang trend {health['warning_trend']}")
+
+st.divider()
+
+# --- AI insight (this module, Team Lead tone) ----------------------------
+ui.render_ai_insight(
+    f"Module deep-dive — {mod['name']}",
+    f"ai_tl_{module_id}",
+    lambda: llm_service.generate_module_report(module_id, "Team Lead"),
+)
 
 st.divider()
 

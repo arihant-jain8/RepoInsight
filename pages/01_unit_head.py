@@ -16,10 +16,12 @@ import plotly.express as px
 import streamlit as st
 
 import analytics
+import llm_service
 import ui
 
 st.set_page_config(page_title="Unit Head", page_icon="🏢", layout="wide")
 ui.require_db()
+ui.llm_badge()
 
 st.title("🏢 Unit Head — Organisation Health")
 st.caption("Non-technical, org-wide. Quality, punctuality, and customer impact.")
@@ -39,6 +41,15 @@ c2.metric("People", total_people)
 c3.metric("🔴 Critical", sum(1 for r in view if r["risk_level"] == "RED"))
 c4.metric("Avg Build Success",
           f"{(sum(r['build_success_rate'] for r in view) / len(view)):.1f}%")
+
+st.divider()
+
+# --- AI insight (org-wide, Unit Head tone) -------------------------------
+ui.render_ai_insight(
+    "Organisation health summary",
+    "ai_unit_head",
+    lambda: llm_service.generate_org_report("Unit Head"),
+)
 
 st.divider()
 

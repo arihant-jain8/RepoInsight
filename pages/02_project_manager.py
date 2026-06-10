@@ -16,10 +16,12 @@ import plotly.express as px
 import streamlit as st
 
 import analytics
+import llm_service
 import ui
 
 st.set_page_config(page_title="Project Manager", page_icon="📋", layout="wide")
 ui.require_db()
+ui.llm_badge()
 
 st.title("📋 Project Manager — Project View")
 st.caption("Scoped to one project: delivery, review activity, and customer impact.")
@@ -31,6 +33,15 @@ project_id = proj["id"]
 
 # Modules in this project (with risk), filtered by project name.
 ranks = [r for r in ui.load_rankings() if r["project"] == proj["name"]]
+
+st.divider()
+
+# --- AI insight (this project, Project Manager tone) ---------------------
+ui.render_ai_insight(
+    f"Project summary — {proj['name']}",
+    f"ai_pm_{project_id}",
+    lambda: llm_service.generate_project_report(project_id, "Project Manager"),
+)
 
 st.divider()
 
