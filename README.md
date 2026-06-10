@@ -100,7 +100,7 @@ The sidebar lists these views:
 | **📋 Project Manager** | One project | Module risk, major/minor review comments, **customer issue → commit traceability** |
 | **🛠️ Team Lead** | One module | Per-commit drill-down, trend charts, reviewer load, commits behind customer issues |
 | **📝 AI Reports** | Any | Generate a role-aware report for a module / project / org, and download it as Markdown |
-| **💬 Management Copilot** | Any | Natural-language chat grounded in the org data |
+| **💬 Management Copilot** | Any | Tool-using **agent** — queries the live DB (analytics + read-only SQL) to answer, and shows the tools it called |
 
 Each role page also has an inline **🧠 Generate AI insight** button that writes a
 report for that page's data, right next to its charts.
