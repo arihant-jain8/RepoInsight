@@ -18,7 +18,7 @@ SCHEMA_PATH = os.path.join(SRC_DIR, "schema.sql")
 # --- LLM (pluggable) ------------------------------------------------------
 # Default: small local model via Ollama (OpenAI-compatible endpoint).
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
-LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:3b")  # or "llama3.2:3b"
+LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b")  # local default; fits an 8GB GPU
 LLM_API_KEY = os.getenv("LLM_API_KEY", "not-needed-for-local")
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "120"))   # seconds per request
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "800"))
