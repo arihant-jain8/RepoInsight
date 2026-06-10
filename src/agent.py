@@ -305,6 +305,7 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
     messages.append({"role": "user", "content": message})
 
     trace = []
+    nudged = False
     for _ in range(MAX_STEPS):
         msg = _chat_raw(messages, tools=TOOLS)
         if msg is None:  # transport error mid-loop -> fallback
@@ -314,6 +315,16 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
 
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
+            # Never accept an answer produced without consulting the data — the
+            # model will otherwise invent modules/numbers. Force a tool call once.
+            if not trace and not nudged:
+                nudged = True
+                messages.append({"role": "assistant", "content": msg.get("content") or ""})
+                messages.append({"role": "user", "content":
+                                 "Do not answer from memory — you have no prior knowledge "
+                                 "of this organisation. Call a tool to fetch the real data "
+                                 "first, then answer."})
+                continue
             return {"text": _scrub_sql(msg.get("content") or "") or "(no answer)",
                     "source": "llm", "trace": trace}
 
