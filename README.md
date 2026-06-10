@@ -62,7 +62,7 @@ This seeds the central `data/engineering.db` (8 modules × 12 weeks of commits, 
 comments, customers, and customer issues).
 
 ```powershell
-python generate_data.py
+python src/generate_data.py
 ```
 
 Expected output:
@@ -107,21 +107,29 @@ The sidebar lists four views:
 ```
 RepoInsight/
 ├── app.py                  # Streamlit entrypoint (Executive Overview)
-├── config.py               # central DB path + pluggable LLM settings
-├── database.py             # SQLite connection + query helpers
-├── schema.sql              # all table + view DDL
-├── generate_data.py        # seed the central engineering.db (run once)
-├── analytics.py            # metric computation (health, trends, punctuality, ...)
-├── risk_engine.py          # GREEN/AMBER/RED risk scoring per module
-├── ui.py                   # shared risk colors + cached loaders
-├── pages/
+├── pages/                  # role-based Streamlit views
 │   ├── 01_unit_head.py
 │   ├── 02_project_manager.py
 │   └── 03_team_lead.py
+├── src/                    # core logic (importable modules)
+│   ├── config.py           # central DB path + pluggable LLM settings
+│   ├── database.py         # SQLite connection + query helpers
+│   ├── schema.sql          # all table + view DDL
+│   ├── generate_data.py    # seed the central engineering.db (run once)
+│   ├── analytics.py        # metric computation (health, trends, punctuality, ...)
+│   ├── risk_engine.py      # GREEN/AMBER/RED risk scoring per module
+│   └── ui.py               # shared risk colors + cached loaders
 ├── data/engineering.db     # generated SQLite database
+├── docs/
+│   ├── Engineering_Intelligence_Plan.md   # full design doc
+│   └── arch.md             # original architecture notes
 ├── requirements.txt
-└── Engineering_Intelligence_Plan.md   # full design doc
+└── README.md
 ```
+
+> `app.py` and `pages/` stay at the project root because Streamlit requires the
+> entrypoint and its `pages/` directory to live together. They add `src/` to the
+> import path at startup, so the views can `import analytics`, `import ui`, etc.
 
 ---
 
@@ -155,7 +163,7 @@ ollama serve            # exposes the OpenAI-compatible API on :11434
 | Problem | Fix |
 |---|---|
 | `streamlit: command not found` | Use `python -m streamlit run app.py` (the script dir may not be on PATH). |
-| Dashboard says "No database found" | Run `python generate_data.py` first. |
+| Dashboard says "No database found" | Run `python src/generate_data.py` first. |
 | PowerShell won't activate the venv | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or use `.\.venv\Scripts\python.exe` directly. |
 | Port 8501 already in use | `python -m streamlit run app.py --server.port 8502`. |
 
@@ -164,7 +172,7 @@ ollama serve            # exposes the OpenAI-compatible API on :11434
 ## Resetting
 
 ```powershell
-python generate_data.py     # re-seed the database from scratch
+python src/generate_data.py     # re-seed the database from scratch
 ```
 
 The generator drops and recreates all tables on each run, so it is safe to re-run any time.

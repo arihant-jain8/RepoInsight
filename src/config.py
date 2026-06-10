@@ -10,9 +10,10 @@ import os
 
 # --- Database -------------------------------------------------------------
 # One central SQLite file that every (simulated) per-module agent writes into.
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SRC_DIR)
 DB_PATH = os.path.join(PROJECT_ROOT, "data", "engineering.db")
-SCHEMA_PATH = os.path.join(PROJECT_ROOT, "schema.sql")
+SCHEMA_PATH = os.path.join(SRC_DIR, "schema.sql")
 
 # --- LLM (pluggable) ------------------------------------------------------
 # Default: small local model via Ollama (OpenAI-compatible endpoint).

@@ -4,6 +4,13 @@ Code-quality bar graph (with team size), punctuality per team, and errors
 reported per customer. Business framing; no per-commit detail.
 """
 
+import os
+import sys
+
+# Make the modules in src/ importable (pages live one level below the root).
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st

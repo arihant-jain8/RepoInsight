@@ -5,6 +5,13 @@ trend charts, reviewer load, risk breakdown, and the specific commits behind
 this module's customer issues.
 """
 
+import os
+import sys
+
+# Make the modules in src/ importable (pages live one level below the root).
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st

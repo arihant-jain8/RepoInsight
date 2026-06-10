@@ -4,6 +4,12 @@ The sidebar lists the role-based pages (Unit Head / Project Manager / Team Lead)
 from the pages/ directory. This landing page is the org-wide executive overview.
 """
 
+import os
+import sys
+
+# Make the modules in src/ importable when launched via `streamlit run app.py`.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
+
 import plotly.express as px
 import streamlit as st
 
