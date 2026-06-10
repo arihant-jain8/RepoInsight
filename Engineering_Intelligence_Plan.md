@@ -6,57 +6,65 @@
 ## Project Overview
 
 Engineering Intelligence Copilot is an AI-powered management assistant that consolidates
-engineering activity across repositories and generates executive reports, risk assessments,
-trend analysis, and actionable recommendations — all from a single dashboard.
+engineering activity across a **unit → project → module → commit** hierarchy and generates
+**role-based** intelligence — executive reports, risk assessments, trend analysis,
+punctuality scoring, customer-issue traceability, and actionable recommendations — all from a
+single dashboard backed by one central database.
 
-The system is designed to help an engineering manager quickly identify:
+The system is built around the idea from `arch.md`: each **module** is owned by a team and has
+its own git repository, and a per-module **ingestion agent** pushes that module's commits,
+owners, reviewers, and review comments into a **central database**. Analytics, a risk engine,
+and a local LLM then turn that raw activity into answers tailored to three audiences:
 
-- Which teams are performing well and which need intervention
-- Why quality or delivery is deteriorating (with specific signals, not just summaries)
-- What concrete actions to take
+- **Unit Head** — non-technical, org-wide health, punctuality, customer impact
+- **Project Manager** — their project only: delivery, per-module comments, customer→commit tracing
+- **Team Lead** — deeply technical, per-commit drill-down on quality and review signals
 
-This MVP uses **fabricated per-PR synthetic data**, SQLite, an analytics engine, a
-risk-scoring engine, a local LLM running on vLLM + ROCm, and a Streamlit dashboard.
-No Git, GitHub, GitLab, or CI integrations are included — those are future enhancements.
+This MVP uses **fabricated but git-shaped synthetic data**, SQLite, an analytics engine, a
+risk-scoring engine, a pluggable local LLM, and a Streamlit dashboard. Real git/GitHub, CI, and
+issue-tracker integrations are designed-for but deferred — the schema is shaped so a real git
+ingestion worker drops in later with no schema change.
 
 ---
 
 ## Elevator Pitch
 
-Engineering Intelligence Copilot is an AI-powered engineering management platform that
-consolidates software delivery and quality signals, identifies team risk, analyzes health
-trends, and generates executive-ready recommendations using a fully local LLM deployment
-on AMD GPU hardware.
+Engineering Intelligence Copilot consolidates software delivery and quality signals from every
+module's repository into one central database, scores team risk and punctuality, traces customer
+issues back to the exact commit that caused them, and generates role-based, executive-ready
+recommendations using a fully local, swappable LLM deployment.
 
 ---
 
 ## Architecture
 
 ```
-generate_data.py   (fabricates all synthetic PR events)
-        ↓
-engineering.db     (SQLite — 8 teams, 12 weeks of history)
-        ↓               ↓
-analytics.py  →  risk_engine.py       (compute metrics + risk scores)
-        ↓                   ↓
-llm_service.py          Streamlit pages 1 & 2
-(calls vLLM → Qwen2.5-7B-Instruct)
-        ↓
-Streamlit pages 3 & 4   (AI reports + management copilot chat)
+repo: backend   ─ agent(backend)  ┐
+repo: frontend  ─ agent(frontend) ├─→  engineering.db  (central, SQLite)
+repo: ai        ─ agent(ai)       │         │
+repo: network   ─ agent(network)  ┘         ├─ analytics.py + risk_engine.py
+                                            │     (metrics, risk, punctuality,
+                                            │      per-customer + customer→commit trace)
+                                            │
+                                            ├─ llm_service.py  (pluggable LLM:
+                                            │   Ollama local now → vLLM/Qwen on AMD later)
+                                            │
+                                            └─ Streamlit — role-based pages:
+                                                 Unit Head · Project Manager · Team Lead
+                                                 + AI Reports + Management Copilot
 ```
 
-### Deliberately Excluded from MVP
+> For the MVP the "agents" are simulated by `generate_data.py`, which fabricates git-shaped data
+> directly into the central DB. The real per-module ingestion workers (`ingest.py`) are the
+> documented drop-in — same target schema, real data source.
 
-These can be added later but are not needed to demonstrate the core idea:
+### Deliberately Excluded from MVP (designed-for, deferred)
 
-- GitHub / GitLab integration
-- Jenkins / CI pipeline integration
-- Jira integration
-- Real webhook / event triggers
-- Knowledge graph
-- MCP servers
-- Vector databases
-- Multi-agent frameworks
+- Real GitHub / GitLab ingestion (schema is git-ready; worker is the drop-in)
+- Jenkins / CI log parsing (build/clang/ASAN/integration stay synthetic until then)
+- Jira / issue-tracker integration (customer DB + targeted delivery stay synthetic until then)
+- Real webhook / event triggers (MVP uses batch backfill)
+- Knowledge graph, vector databases, heavyweight multi-agent frameworks
 
 ---
 
@@ -66,43 +74,51 @@ These can be added later but are not needed to demonstrate the core idea:
 |---|---|---|
 | Dashboard | **Streamlit** | Python-native, no frontend work, charts in 3 lines |
 | Charts | **Plotly Express** via `st.plotly_chart` | Native Streamlit support, interactive by default |
-| Database | **SQLite** | Zero config, perfect for MVP scale |
-| LLM model | **Qwen2.5-7B-Instruct** | Reliable on ROCm, fast enough for demo, fits in VRAM safely |
-| Inference server | **vLLM** (OpenAI-compatible API) | Straightforward HTTP calls, easy to swap model later |
-| Hardware | **AMD GPU via ROCm** | As specified |
+| Database | **SQLite** — single central file `data/engineering.db` via `sqlite3` | Zero config; the one "central database" all module agents write into; perfect for MVP scale |
+| DB scale-path | **PostgreSQL** (future) | Swap only `database.py` when concurrent users / larger data demand it |
+| Repo layout | **Multi-repo** — one git repo per module | Matches arch.md: each module owned by a team, one ingestion agent per repo |
+| Modules | **Generic** (backend / frontend / ai / network / …) | Not limited to cpp; a module is any owned codebase |
+| Data source (MVP) | **Synthetic, git-shaped** | Fast to a working demo; schema is git-ready so real ingestion drops in later |
+| LLM model (now) | **Small local model via Ollama** (e.g. `qwen2.5:3b` / `llama3.2:3b`) | Runs on this Windows PC, no AMD/ROCm setup needed |
+| LLM model (later) | **Qwen2.5-7B-Instruct on vLLM + ROCm** | Higher-quality prose on the AMD machine; swap `base_url` + `model` only |
+| Inference API | **OpenAI-compatible `/v1/chat/completions`** | Identical code for Ollama and vLLM |
 | HTTP client | **httpx** | Async-capable, simple API |
 
-> **Why 7B and not 14B?** The 14B model on ROCm can be unpredictable in a 2-day timeline —
-> load times, VRAM pressure, and quantization issues can eat hours. The 7B delivers
-> good-quality management prose at 2–5× the speed. Upgrade after the demo if needed.
+> **Why pluggable LLM?** Ollama and vLLM both expose the OpenAI-compatible chat API, so the
+> client code never changes. Develop locally against a small model; on the AMD/ROCm box, point
+> `LLM_BASE_URL` at the vLLM server and set `LLM_MODEL` to `Qwen/Qwen2.5-7B-Instruct`. That's it.
 
 ---
 
 ## Project Structure
 
 ```
-engineering-copilot/
+RepoInsight/
 │
-├── app.py                  # Streamlit entrypoint + sidebar navigation
-├── generate_data.py        # Run once to seed engineering.db
-├── database.py             # SQLite connection + raw query helpers
-├── analytics.py            # All metric computation (health, trends, org summary)
-├── risk_engine.py          # Risk score + risk level per team
-├── llm_service.py          # vLLM HTTP client + prompt builder
+├── app.py                  # Streamlit entrypoint + sidebar / role selector
+├── config.py               # LLM + DB config (model-swappable: Ollama now, vLLM later)
+├── database.py             # SQLite connection + query helpers (single DB path)
+├── schema.sql              # all table + view DDL
+├── generate_data.py        # run once to seed the central engineering.db (simulates agents)
+├── ingest.py               # (future) per-module git ingestion worker → central DB
+├── analytics.py            # metric computation (rollups, punctuality, customer trace)
+├── risk_engine.py          # risk score + level per module/project
+├── llm_service.py          # OpenAI-compatible LLM client + role-aware prompt builder
 │
 ├── pages/
-│   ├── 01_overview.py      # Executive overview: org KPIs, team rankings
-│   ├── 02_teams.py         # Team drill-down: metrics + trend charts
-│   ├── 03_reports.py       # AI report generator (per team or org-wide)
-│   └── 04_copilot.py       # Management copilot: natural language chat
+│   ├── 01_unit_head.py        # Unit Head: non-technical, org-wide health
+│   ├── 02_project_manager.py  # Project Manager: own project; delivery; customer→commit trace
+│   ├── 03_team_lead.py        # Team Lead: technical per-commit drill-down
+│   ├── 04_reports.py          # AI report generator (role-aware)
+│   └── 05_copilot.py          # Management copilot: natural-language chat
 │
 ├── prompts/
-│   ├── team_report.txt     # Prompt template for team-level reports
-│   ├── org_report.txt      # Prompt template for org-wide reports
-│   └── copilot.txt         # System prompt for chat interface
+│   ├── team_report.txt     # prompt template for module/team reports
+│   ├── org_report.txt      # prompt template for org-wide reports
+│   └── copilot.txt         # system prompt for chat interface
 │
 ├── data/
-│   └── engineering.db      # Generated SQLite database
+│   └── engineering.db      # generated central SQLite database
 │
 └── requirements.txt
 ```
@@ -115,133 +131,220 @@ plotly
 pandas
 httpx
 faker
+# when real ingestion lands: GitPython, requests
 ```
 
 ---
 
 ## Database Design
 
-### Why Per-PR Events (Not Weekly Aggregates)
+One central SQLite file (`data/engineering.db`) holding two logical groups of tables — an
+**internal DB** (engineering activity) and a **customer DB** (support signals) — joined by
+**`commit_id`** so any customer issue can be traced back to the commit that caused it.
 
-The original weekly aggregate schema loses all per-PR signal. Without it, the LLM can
-only say "warnings went up this week" — with it, the LLM can say "PR #47 introduced
-23 new clang warnings, all in `auth/session.c`." Weekly summaries are computed via a
-SQL view on top of the event table.
+### Why Per-Commit (git-ready) and a separate customer DB
 
-### teams
+`arch.md` requires commit-level granularity: a customer issue references a `commit-id`, and a
+Team Lead must drill into individual commits (author, reviewer, comments, quality signals). A
+PR-only or weekly-aggregate schema loses that. Modeling per-commit also makes the schema
+**git-shaped** — a real ingestion worker can later fill `commit_id / author / reviewer / module /
+review comments / actual delivery` straight from `git log` + the GitHub API with no schema change.
+
+### Internal DB
 
 ```sql
-CREATE TABLE teams (
+-- Organisational hierarchy
+CREATE TABLE units (
     id      INTEGER PRIMARY KEY,
     name    TEXT,
-    manager TEXT,
-    product TEXT
+    head    TEXT            -- Unit Head (persona)
 );
-```
 
-Example teams: Networking, Auth, Security, Platform, Cloud, ML Pipeline, Backend, UI/UX
-
-### repositories
-
-```sql
-CREATE TABLE repositories (
+CREATE TABLE projects (
     id      INTEGER PRIMARY KEY,
-    team_id INTEGER,
-    name    TEXT
+    unit_id INTEGER,
+    name    TEXT,
+    manager TEXT            -- Project Manager (persona)
 );
-```
 
-Each team has 2–3 repos. Example: `5g-core`, `auth-service`, `web-ui`, `telemetry`, `scheduler`
-
-### pr_events — the core table
-
-```sql
-CREATE TABLE pr_events (
+CREATE TABLE modules (
     id          INTEGER PRIMARY KEY,
-    pr_id       TEXT,           -- e.g. 'NET-PR-047'
-    repo_id     INTEGER,
-    team_id     INTEGER,
-    week        TEXT,           -- 'W01' through 'W12'
+    project_id  INTEGER,
+    name        TEXT,       -- e.g. 'auth-service'
+    type        TEXT,       -- generic: backend | frontend | ai | network | ...
+    repo_url    TEXT,       -- multi-repo: each module = its own git repo
+    team_lead   TEXT,       -- Team Lead (persona)
+    team_size   INTEGER     -- people on the team (for Unit Head's team-size view)
+);
 
-    -- Build
-    build_success           INTEGER,  -- 1 or 0
+CREATE TABLE engineers (
+    id    INTEGER PRIMARY KEY,
+    name  TEXT
+);
+
+-- Core commit table (one row per commit; git-ready)
+CREATE TABLE commits (
+    id                  INTEGER PRIMARY KEY,
+    commit_id           TEXT,       -- SHA-like; join key for customer issues
+    pr_id               TEXT,       -- nullable; git-ready (e.g. 'NET-PR-047')
+    module_id           INTEGER,
+    project_id          INTEGER,
+    unit_id             INTEGER,
+    week                TEXT,       -- 'W01'..'W12'
+    committed_at        TEXT,       -- ISO timestamp
+
+    author_id           INTEGER,
+    reviewer_id         INTEGER,
+
+    -- Delivery (for punctuality)
+    targeted_delivery   TEXT,       -- planned date (synthetic / from planning tool later)
+    actual_delivery     TEXT,       -- merge date (from git later)
+
+    -- Build / CI (synthetic until CI integration)
+    build_success           INTEGER,    -- 1 or 0
     compile_warnings        INTEGER,
-
-    -- Static analysis
     clang_warnings          INTEGER,
     codechecker_findings    INTEGER,
     codechecker_critical    INTEGER,
-
-    -- Runtime checks
     asan_failures           INTEGER,
-
-    -- Integration tests
     integration_total       INTEGER,
     integration_failed      INTEGER,
 
-    -- Code review
-    review_comments         INTEGER,
+    -- Review / collaboration
     review_latency_hours    REAL,
-    reviewer_count          INTEGER,
-
-    -- Business
-    client_complaints       INTEGER,
     lines_changed           INTEGER
+);
+
+-- Review comments as a first-class entity (NOT pre-aggregated counts)
+CREATE TABLE review_comments (
+    id          INTEGER PRIMARY KEY,
+    commit_id   TEXT,       -- FK -> commits.commit_id
+    reviewer_id INTEGER,
+    comment     TEXT,       -- the comment itself
+    severity    TEXT,       -- 'major' or 'minor'
+    created_at  TEXT
 );
 ```
 
-### weekly_summary — computed view
+> A commit has 0..N `review_comments` rows of mixed severity. Major/minor **counts** are derived
+> with `GROUP BY severity` — never stored as columns. When real ingestion lands, comments come
+> from PR review comments and severity from a label or heuristic.
+
+### Customer DB
 
 ```sql
+CREATE TABLE customers (
+    id    INTEGER PRIMARY KEY,
+    name  TEXT
+);
+
+CREATE TABLE customer_issues (
+    id            INTEGER PRIMARY KEY,
+    customer_id   INTEGER,
+    project_id    INTEGER,
+    module_id     INTEGER,
+    commit_id     TEXT,         -- FK -> commits.commit_id  (which commit caused this issue)
+    error_info    TEXT,
+    severity      TEXT,         -- e.g. 'low' | 'medium' | 'high' | 'critical'
+    report_time   TEXT,
+    resolve_time  TEXT          -- nullable while open
+);
+```
+
+### Views
+
+```sql
+-- Per module / week aggregates (rebuilt on the commits table)
 CREATE VIEW weekly_summary AS
 SELECT
     week,
-    team_id,
-    COUNT(*)                                                AS prs_merged,
+    module_id,
+    project_id,
+    COUNT(*)                                                AS commits_merged,
     ROUND(100.0 * SUM(build_success) / COUNT(*), 1)        AS build_success_rate,
     SUM(clang_warnings)                                     AS total_clang_warnings,
-    ROUND(SUM(clang_warnings) * 1.0 / COUNT(*), 1)         AS avg_clang_warnings_per_pr,
+    ROUND(SUM(clang_warnings) * 1.0 / COUNT(*), 1)         AS avg_clang_warnings_per_commit,
     SUM(asan_failures)                                      AS total_asan_failures,
     SUM(integration_failed)                                 AS integration_failures,
     ROUND(100.0 * SUM(integration_failed) /
           NULLIF(SUM(integration_total), 0), 1)             AS integration_fail_pct,
-    ROUND(AVG(review_latency_hours), 1)                    AS avg_review_latency,
-    ROUND(AVG(reviewer_count), 1)                          AS avg_reviewers,
-    SUM(client_complaints)                                  AS client_complaints
-FROM pr_events
-GROUP BY week, team_id;
+    ROUND(AVG(review_latency_hours), 1)                    AS avg_review_latency
+FROM commits
+GROUP BY week, module_id;
+
+-- Punctuality: how late delivery was vs plan, per module
+CREATE VIEW punctuality AS
+SELECT
+    module_id,
+    project_id,
+    COUNT(*)                                                          AS delivered,
+    ROUND(AVG(julianday(actual_delivery) - julianday(targeted_delivery)), 1)
+                                                                      AS avg_days_late
+FROM commits
+WHERE targeted_delivery IS NOT NULL AND actual_delivery IS NOT NULL
+GROUP BY module_id;
+
+-- Customer issue -> commit -> author/module lineage
+CREATE VIEW customer_trace AS
+SELECT
+    ci.id            AS issue_id,
+    cu.name          AS customer,
+    ci.severity      AS issue_severity,
+    ci.error_info,
+    ci.commit_id,
+    m.name           AS module,
+    e.name           AS author
+FROM customer_issues ci
+JOIN customers  cu ON cu.id = ci.customer_id
+LEFT JOIN commits   c  ON c.commit_id = ci.commit_id
+LEFT JOIN modules   m  ON m.id = c.module_id
+LEFT JOIN engineers e  ON e.id = c.author_id;
 ```
 
 ---
 
 ## Synthetic Data Strategy
 
-Generate ~8 PRs per team per week over 12 weeks. Each team follows a clear storyline
-so the LLM has meaningful trends to report on — not random noise.
+`generate_data.py` simulates the per-module ingestion agents by fabricating git-shaped data
+directly into the central DB. It keeps the **storyline + `lerp`** approach so the LLM has
+meaningful trends, not noise.
 
-### Team Storylines
+Generate: units → projects → modules (each a repo, with a `team_lead` and `team_size`) →
+engineers. Then, per module, ~8 **commits** per week over 12 weeks, each with:
 
-| Team | Trend | Key signals |
+- a SHA-like `commit_id`, an author and a reviewer
+- a handful of `review_comments` rows (each its own `comment` text + `severity` major/minor)
+- `targeted_delivery` vs `actual_delivery` — some modules slip (bad punctuality)
+- synthetic build / clang / CodeChecker / ASAN / integration / review-latency signals trending
+  along the module's storyline
+
+Then generate 3 `customers` and a set of `customer_issues`, with a subset pointing at **real
+generated `commit_id`s** in the worst-quality modules so the customer→commit traceability demo
+lights up.
+
+### Team / Module Storylines
+
+| Module | Trend | Key signals |
 |---|---|---|
-| **Networking** | Deteriorating fast | Build success: 94% → 78%, clang warnings ~doubling each month, client complaints rising |
-| **Auth** | Critical | ASAN failures on every other PR, frequent integration failures, build often fails |
-| **Security** | Improving | Warnings halving week-over-week, build stable at 96%+, review participation high |
-| **Platform** | Rock solid | Best scores org-wide, low latency, consistent metrics |
-| **Cloud** | Tech debt creeping | Build stable but warnings +5% per week, review latency slowly rising |
-| **ML Pipeline** | Volatile | New team, inconsistent metrics, high review latency |
-| **Backend** | Steady | Average everything, dependable, no alarms |
-| **UI/UX** | Slight decline | Review latency climbing, fewer review comments, build slipping |
+| **Networking** | Deteriorating fast | Build 94% → 78%, clang warnings ~doubling/month, rising customer issues |
+| **Auth** | Critical | ASAN on every other commit, frequent integration failures, build often fails |
+| **Security** | Improving | Warnings halving week-over-week, build stable 96%+, high review participation |
+| **Platform** | Rock solid | Best scores org-wide, low latency, on-time delivery |
+| **Cloud** | Tech debt creeping | Build stable but warnings +5%/week, review latency rising |
+| **ML Pipeline** | Volatile | New team, inconsistent metrics, high review latency, late delivery |
+| **Backend** | Steady | Average everything, dependable |
+| **UI/UX** | Slight decline | Review latency climbing, fewer comments, build slipping |
 
-### Example: Networking Team Weekly Data
+### Example: Networking module weekly trend
 
-| Week | Build Success | Clang Warnings | ASAN Failures | Client Complaints |
+| Week | Build Success | Clang Warnings | ASAN Failures | Customer Issues |
 |---|---|---|---|---|
 | W01 | 94% | 18 | 0 | 0 |
 | W04 | 88% | 34 | 1 | 1 |
 | W08 | 83% | 67 | 2 | 3 |
 | W12 | 78% | 118 | 4 | 5 |
 
-### generate_data.py Approach
+### Approach (sketch)
 
 ```python
 import sqlite3, random
@@ -249,158 +352,95 @@ from faker import Faker
 
 fake = Faker()
 
-TEAM_CONFIGS = {
-    "Networking": {
-        "build_success_start": 0.94, "build_success_end": 0.78,
-        "clang_start": 18,           "clang_end": 118,
-        "asan_rate": 0.10,           "complaint_rate": 0.20,
-    },
-    "Auth": {
-        "build_success_start": 0.85, "build_success_end": 0.72,
-        "clang_start": 30,           "clang_end": 80,
-        "asan_rate": 0.40,           "complaint_rate": 0.30,
-    },
-    "Security": {
-        "build_success_start": 0.88, "build_success_end": 0.97,
-        "clang_start": 60,           "clang_end": 12,
-        "asan_rate": 0.01,           "complaint_rate": 0.01,
-    },
-    # ... other teams
+MODULE_CONFIGS = {
+    "Networking": {"build_start": 0.94, "build_end": 0.78,
+                   "clang_start": 18, "clang_end": 118,
+                   "asan_rate": 0.10, "issue_rate": 0.20, "late_days": 14},
+    "Auth":       {"build_start": 0.85, "build_end": 0.72,
+                   "clang_start": 30, "clang_end": 80,
+                   "asan_rate": 0.40, "issue_rate": 0.30, "late_days": 10},
+    "Security":   {"build_start": 0.88, "build_end": 0.97,
+                   "clang_start": 60, "clang_end": 12,
+                   "asan_rate": 0.01, "issue_rate": 0.01, "late_days": 0},
+    # ... other modules
 }
 
-def lerp(start, end, t):
-    """Linear interpolate between start and end; t in [0, 1]."""
-    return start + (end - start) * t
+def lerp(a, b, t):
+    """Linear interpolate; t in [0, 1]."""
+    return a + (b - a) * t
 
-def generate_pr(team_name, week_idx, team_id, repo_id, pr_num):
-    cfg = TEAM_CONFIGS[team_name]
-    t = week_idx / 11  # normalised week position
-    build_prob = lerp(cfg["build_success_start"], cfg["build_success_end"], t)
-    clang_base = lerp(cfg["clang_start"], cfg["clang_end"], t)
-
-    return {
-        "pr_id": f"{team_name[:3].upper()}-PR-{pr_num:04d}",
-        "repo_id": repo_id,
-        "team_id": team_id,
-        "week": f"W{week_idx+1:02d}",
-        "build_success": 1 if random.random() < build_prob else 0,
-        "clang_warnings": max(0, int(random.gauss(clang_base, clang_base * 0.15))),
-        "codechecker_findings": max(0, int(random.gauss(clang_base * 0.4, 3))),
-        "codechecker_critical": max(0, int(random.gauss(clang_base * 0.05, 1))),
-        "asan_failures": 1 if random.random() < cfg["asan_rate"] else 0,
-        "integration_total": random.randint(40, 80),
-        "integration_failed": random.randint(0, 5) if build_prob > 0.85 else random.randint(3, 12),
-        "review_comments": max(1, int(random.gauss(8, 3))),
-        "review_latency_hours": max(1, random.gauss(24, 8)),
-        "reviewer_count": random.randint(1, 4),
-        "client_complaints": 1 if random.random() < cfg["complaint_rate"] else 0,
-        "lines_changed": random.randint(50, 800),
-    }
+def fake_sha():
+    return "".join(random.choice("0123456789abcdef") for _ in range(12))
 ```
 
 ---
 
 ## Analytics Engine
 
-`analytics.py` transforms raw PR events into actionable metrics for the dashboard and LLM.
-
-### Functions
+`analytics.py` transforms raw commits into role-ready metrics.
 
 ```python
 def get_org_summary(db) -> dict:
-    """High-level org health: team counts, average build rate, top risk team."""
+    """Org health: module/project counts, avg build rate, top-risk module, customer impact."""
 
-def get_team_health(db, team_id: int, weeks: int = 4) -> dict:
-    """Aggregate metrics for a team over the last N weeks."""
+def get_module_health(db, module_id: int, weeks: int = 4) -> dict:
+    """Aggregate metrics for a module over the last N weeks."""
 
-def get_team_trends(db, team_id: int) -> list[dict]:
-    """Week-by-week metric history for trend charts."""
+def get_module_trends(db, module_id: int) -> list[dict]:
+    """Week-by-week history for trend charts."""
 
-def compare_teams(db, team_a_id: int, team_b_id: int) -> dict:
-    """Side-by-side comparison of two teams."""
+def get_punctuality(db, scope_id: int, level: str) -> dict:
+    """Avg days-late vs plan, per module/project — the punctuality score."""
 
-def get_all_team_rankings(db) -> list[dict]:
-    """All teams ranked by risk score, with health level."""
+def get_customer_impact(db, project_id: int | None = None) -> list[dict]:
+    """Errors reported per customer (optionally scoped to a project)."""
+
+def trace_issue_to_commit(db, issue_id: int) -> dict:
+    """Customer issue -> commit -> author/module (the customer_trace view)."""
+
+def get_commit_comments(db, module_id: int) -> list[dict]:
+    """Per-commit comment counts by severity (GROUP BY severity)."""
+
+def get_all_module_rankings(db) -> list[dict]:
+    """All modules ranked by risk score, with health level."""
 ```
 
-### Metrics Computed
-
-**Delivery**
-- PR velocity (PRs merged per week)
-- Build success rate
-- Release frequency (optional)
-
-**Quality**
-- Clang warning trend (week-over-week delta)
-- CodeChecker findings trend
-- ASAN failure rate
-- Integration test failure rate
-
-**Collaboration**
-- Average review latency (hours)
-- Average reviewer count per PR
-- Review comment density
-
-**Business**
-- Client complaints per week
-- Escaped defect rate
+**Metrics:** delivery (commit velocity, build success, **punctuality**), quality (clang /
+CodeChecker / ASAN / integration trends), collaboration (review latency, reviewer load, comment
+density by severity), business (customer issues per customer, escaped-defect → commit lineage).
 
 ---
 
 ## Risk Engine
 
-`risk_engine.py` combines multiple dimensions into a single normalised risk score.
-All intermediate values are normalised to 0–100 before weighting, so dimensions
-are dimensionally consistent.
+`risk_engine.py` combines dimensions into one normalised score per module/project. All
+sub-values are normalised to 0–100 before weighting.
 
 ```python
-def compute_team_risk(m: dict) -> dict:
-    """
-    m: dict from analytics.get_team_health()
-    Returns: {'score': float, 'level': str, 'breakdown': dict}
-    """
+def compute_module_risk(m: dict) -> dict:
+    """m: dict from analytics.get_module_health(). Returns {score, level, breakdown}."""
 
-    # Quality risk (0–100)
-    warning_score = min(m['avg_clang_warnings_per_pr'] * 3, 100)
-    asan_score    = min(m['avg_asan_per_pr'] * 25, 100)
+    warning_score = min(m['avg_clang_warnings_per_commit'] * 3, 100)
+    asan_score    = min(m['avg_asan_per_commit'] * 25, 100)
     integ_score   = min(m['integration_fail_pct'] * 1.5, 100)
     quality_risk  = 0.40 * warning_score + 0.35 * asan_score + 0.25 * integ_score
 
-    # Delivery risk (0–100): directly the build failure rate
     delivery_risk = 100 - m['build_success_rate']
 
-    # Collaboration risk (0–100): latency normalised to a 48-hour ceiling
-    # Note: review_latency and reviewer_count are kept separate —
-    # never subtract a count from a duration.
     latency_norm  = min(m['avg_review_latency_hours'] / 48 * 100, 100)
-    reviewer_pen  = max(0, (3 - m['avg_reviewers']) * 15)  # penalty if avg < 3 reviewers
+    reviewer_pen  = max(0, (3 - m['avg_reviewers']) * 15)
     collab_risk   = min(latency_norm * 0.7 + reviewer_pen * 0.3, 100)
 
-    # Weighted final score
-    risk_score = (
-        0.50 * quality_risk +
-        0.30 * delivery_risk +
-        0.20 * collab_risk
-    )
+    risk_score = 0.50 * quality_risk + 0.30 * delivery_risk + 0.20 * collab_risk
 
-    level = (
-        'GREEN' if risk_score < 30 else
-        'AMBER' if risk_score < 60 else
-        'RED'
-    )
+    level = ('GREEN' if risk_score < 30 else
+             'AMBER' if risk_score < 60 else 'RED')
 
-    return {
-        'score': round(risk_score, 1),
-        'level': level,
-        'breakdown': {
-            'quality_risk':  round(quality_risk, 1),
-            'delivery_risk': round(delivery_risk, 1),
-            'collab_risk':   round(collab_risk, 1),
-        }
-    }
+    return {'score': round(risk_score, 1), 'level': level,
+            'breakdown': {'quality_risk':  round(quality_risk, 1),
+                          'delivery_risk': round(delivery_risk, 1),
+                          'collab_risk':   round(collab_risk, 1)}}
 ```
-
-### Risk Levels
 
 | Score | Level | Meaning |
 |---|---|---|
@@ -410,325 +450,270 @@ def compute_team_risk(m: dict) -> dict:
 
 ---
 
-## Dashboard Pages (Streamlit)
+## Dashboard — Role-Based (Streamlit)
+
+A **role selector** in the sidebar switches between three personas, ordered most → least
+technical. Same central data; each page frames it for its audience.
 
 ### app.py — Entry Point
 
 ```python
 import streamlit as st
 
-st.set_page_config(
-    page_title="Engineering Intelligence Copilot",
-    page_icon="🔬",
-    layout="wide",
-)
+st.set_page_config(page_title="Engineering Intelligence Copilot",
+                   page_icon="🔬", layout="wide")
 
 st.sidebar.title("Engineering Copilot")
-page = st.sidebar.selectbox(
-    "Navigate",
-    ["Executive Overview", "Team Explorer", "AI Reports", "Management Copilot"]
-)
+role = st.sidebar.selectbox("Role",
+    ["Unit Head", "Project Manager", "Team Lead", "AI Reports", "Management Copilot"])
 ```
 
-### Page 1: Executive Overview
+### Page 1 — Unit Head (non-technical, org-wide)
 
-**What it shows:**
+- **Code-quality bar graph** per team/module, annotated with **team size** (people per team)
+- **Punctuality score** per team (e.g. "planned 1 month, slipped 2–3 weeks")
+- **Errors reported per customer** (3 customers) — which customer is hurting most
+- KPI cards: healthy / warning / critical modules, avg build success
+- 2–3 chart types; business framing, no raw commit detail
 
-- KPI cards: Healthy teams / Warning teams / Critical teams / Avg build success
-- Team health table ranked by risk score, with colour-coded risk badges
-- Org-level bar chart: risk score per team
-- Callout: highest-risk team + fastest-improving team
+### Page 2 — Project Manager (semi-technical, own project only)
+
+- Scoped to the manager's **own project / team**
+- **Per-module, commit-wise comment counts** (major vs minor)
+- **Customer-issue → commit traceability**: a table where each customer issue links to the
+  commit (and author/module) that caused it
+- Delivery & punctuality for the project's modules; per-module risk badges
+
+### Page 3 — Team Lead (most technical, own module/team)
+
+- **Per-commit drill-down**: author, reviewer, major/minor comments, lines changed, review latency
+- **Raw quality signals per commit** and trend: clang / CodeChecker / ASAN / integration failures
+- **Reviewer load / review participation**
+- The **specific commits** behind each customer issue and each quality regression — actionable at
+  the individual-commit level, not summaries
 
 ```python
-# Key Streamlit patterns for this page
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Healthy Teams", healthy_count)
-col2.metric("Warning Teams", warning_count, delta=f"{delta} vs last week")
-col3.metric("Critical Teams", critical_count)
-col4.metric("Avg Build Success", f"{avg_build:.1f}%")
-
-st.dataframe(
-    rankings_df.style.applymap(colour_risk, subset=["Risk Level"]),
-    use_container_width=True
-)
+trend_df = analytics.get_module_trends(db, module_id)
+st.plotly_chart(px.line(trend_df, x="week", y="build_success_rate",
+                        title="Build Success Rate", markers=True),
+                use_container_width=True)
 ```
 
-### Page 2: Team Explorer
+### Page 4 — AI Reports (role-aware)
 
-**What it shows:**
+- Scope selector: module / project / org-wide
+- "Generate Report" button → LLM call with summarised JSON context
+- Tone/detail tuned per persona (Unit Head = business prose; PM = delivery + risk; TL =
+  technical specifics with commit-level evidence)
 
-- Team selector (dropdown)
-- 4 metric cards: Quality Score, Delivery Score, Collaboration Score, Risk Score
-- Line chart: build success rate over 12 weeks
-- Line chart: clang warnings over 12 weeks
-- Bar chart: integration failures over 12 weeks
-- Risk breakdown (quality / delivery / collaboration sub-scores)
+### Page 5 — Management Copilot (chat)
 
-```python
-team_name = st.selectbox("Select team", team_names)
-trend_df  = analytics.get_team_trends(db, team_id)
+- Chat input + history in `st.session_state`; org context injected each turn
+- Example questions: "Which module should I focus on?", "Why is Networking deteriorating?",
+  "Which commit caused Acme's latest issue?", "Is Auth getting better or worse?",
+  "Which team is slipping on delivery?"
 
-st.plotly_chart(
-    px.line(trend_df, x="week", y="build_success_rate",
-            title="Build Success Rate", markers=True),
-    use_container_width=True
-)
+---
+
+## Multi-Agent Ingestion (git-ready, mostly future)
+
+Each module is its own git repo, and each has an **ingestion agent** — a scoped worker, not
+necessarily an LLM — that pushes that repo's activity into the central `engineering.db`:
+
+```bash
+python ingest.py --repo https://git.example/auth-service.git --module auth
 ```
 
-### Page 3: AI Executive Reports
+The worker parses `git log` + the GitHub API for that repo and writes `commits`
+(commit_id, author, reviewer, module, lines changed, actual_delivery = merge date) and
+`review_comments` (text + severity). A loop or scheduler runs one worker per module; all write to
+the same central DB — exactly arch.md's "Agent N for module N → central database."
 
-**What it shows:**
+**Triggering, easiest → hardest:**
+1. **Batch backfill (start here):** one pass over history populates the DB.
+2. **Polling (cron):** run every N minutes/nightly; process only new commits. No public endpoint
+   needed — fine on a Windows PC.
+3. **Webhooks (real-time):** GitHub POSTs on push/PR-merge → routed to the module's worker.
 
-- Report scope selector: individual team or entire org
-- "Generate Report" button (triggers LLM call)
-- Rendered markdown report with spinner while loading
+**What git provides** vs **what stays synthetic / needs other systems:**
 
-```python
-scope = st.radio("Report scope", ["Team Report", "Org-wide Report"])
-if scope == "Team Report":
-    team = st.selectbox("Team", team_names)
+| Field | Source |
+|---|---|
+| commit_id, author, reviewer, module, lines_changed, actual_delivery | git / GitHub ✅ |
+| review comments + severity | PR comments (severity via label/heuristic) ✅⚠️ |
+| build / clang / CodeChecker / ASAN / integration | **CI logs** (synthetic until then) |
+| targeted_delivery | **planning tool** / manual (synthetic until then) |
+| customer issues + issue→commit link | **support/issue tracker** + convention (synthetic until then) |
 
-if st.button("Generate Report"):
-    with st.spinner("Generating executive report..."):
-        context = analytics.get_team_health(db, team_id)
-        risk    = risk_engine.compute_team_risk(context)
-        report  = llm_service.generate_team_report(context, risk)
-    st.markdown(report)
-```
-
-### Page 4: Management Copilot
-
-**What it shows:**
-
-- Chat input box
-- Conversation history
-- Each user message injects current org context into the LLM prompt
-
-```python
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-for msg in st.session_state.messages:
-    st.chat_message(msg["role"]).markdown(msg["content"])
-
-if prompt := st.chat_input("Ask about your engineering org..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    context = analytics.get_org_summary(db)
-    response = llm_service.chat(prompt, context, st.session_state.messages)
-    st.session_state.messages.append({"role": "assistant", "content": response})
-    st.rerun()
-```
-
-**Example questions the copilot should handle:**
-- "Which team should I focus on this week?"
-- "Why is the Networking team deteriorating?"
-- "Compare Platform and Cloud."
-- "What are the top 3 engineering concerns right now?"
-- "Is the Auth situation getting better or worse?"
+For the MVP, `generate_data.py` stands in for all agents; `ingest.py` is the documented drop-in
+that targets the identical schema.
 
 ---
 
 ## LLM Integration
 
-### vLLM Setup on ROCm + AMD GPU
+### Pluggable, config-driven
 
-```bash
-# Install
-pip install vllm
+```python
+# config.py
+import os
 
-# Start the server — run this FIRST THING on Day 2
-# The model download alone (~15 GB) can take 20–40 minutes
-ROCR_VISIBLE_DEVICES=0 python -m vllm.entrypoints.openai.api_server \
-    --model Qwen/Qwen2.5-7B-Instruct \
-    --port 8000 \
-    --max-model-len 4096 \
-    --gpu-memory-utilization 0.85 \
-    --trust-remote-code
+DB_PATH      = os.path.join("data", "engineering.db")
 
-# Verify it's up
-curl http://localhost:8000/health
+# Default: small local model via Ollama (OpenAI-compatible API)
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+LLM_MODEL    = os.getenv("LLM_MODEL",    "qwen2.5:3b")     # or "llama3.2:3b"
+LLM_API_KEY  = os.getenv("LLM_API_KEY",  "not-needed-for-local")
+
+# On the AMD/ROCm machine, switch to vLLM by setting:
+#   LLM_BASE_URL = http://localhost:8000/v1
+#   LLM_MODEL    = Qwen/Qwen2.5-7B-Instruct
+# No code changes — same OpenAI-compatible endpoint.
 ```
-
-> **If VRAM allows (>28 GB):** swap `Qwen2.5-7B-Instruct` for `Qwen2.5-14B-Instruct`
-> for higher-quality reports. The code is identical — just change the model string.
 
 ### llm_service.py
 
 ```python
-import httpx
+import httpx, json
+import config
 
-VLLM_URL = "http://localhost:8000/v1/chat/completions"
-MODEL    = "Qwen/Qwen2.5-7B-Instruct"
+URL = f"{config.LLM_BASE_URL}/chat/completions"
 
 def _call(messages: list[dict], max_tokens: int = 600) -> str:
-    r = httpx.post(VLLM_URL, json={
-        "model": MODEL,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": 0.3,
-    }, timeout=60.0)
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+    try:
+        r = httpx.post(URL, json={
+            "model": config.LLM_MODEL,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.3,
+        }, headers={"Authorization": f"Bearer {config.LLM_API_KEY}"}, timeout=120.0)
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"⚠️ LLM unavailable ({e}). Showing data without AI narrative."
 
-
-def generate_team_report(team_metrics: dict, risk: dict) -> str:
+def generate_team_report(metrics: dict, risk: dict, role: str = "Project Manager") -> str:
     with open("prompts/team_report.txt") as f:
         template = f.read()
-
-    context_json = {
-        "team":                  team_metrics["name"],
-        "risk_score":            risk["score"],
-        "risk_level":            risk["level"],
-        "build_success_rate":    team_metrics["build_success_rate"],
-        "avg_clang_warnings":    team_metrics["avg_clang_warnings_per_pr"],
-        "asan_failures":         team_metrics["total_asan_failures"],
-        "integration_fail_pct":  team_metrics["integration_fail_pct"],
-        "avg_review_latency_hrs": team_metrics["avg_review_latency"],
-        "client_complaints":     team_metrics["client_complaints"],
-        "warning_trend":         team_metrics["clang_warning_trend"],  # '+38%' or '-12%'
-    }
-
-    prompt = template.format(context=context_json)
+    context = {**metrics, "risk_score": risk["score"], "risk_level": risk["level"]}
+    prompt = template.format(role=role, context=json.dumps(context, indent=2))
     return _call([{"role": "user", "content": prompt}], max_tokens=800)
-
 
 def chat(user_message: str, org_context: dict, history: list[dict]) -> str:
     with open("prompts/copilot.txt") as f:
-        system_prompt = f.read().format(context=org_context)
-
+        system_prompt = f.read().format(context=json.dumps(org_context, indent=2))
     messages = [{"role": "system", "content": system_prompt}]
     messages += [{"role": m["role"], "content": m["content"]} for m in history[-6:]]
     messages += [{"role": "user", "content": user_message}]
-
     return _call(messages, max_tokens=500)
 ```
 
 ### Prompt Strategy — Never Send Raw Rows
 
-Always summarise analytics output into a structured JSON context block before sending
-to the LLM. Raw database rows waste tokens, degrade output quality, and hit context limits.
+Always summarise analytics output into a structured JSON context block before sending to the LLM.
+Raw rows waste tokens, degrade output, and hit context limits.
 
-**Bad:**
-```
-1000 rows of pr_events data...
-```
-
-**Good:**
+**Good context:**
 ```json
 {
-  "team": "Networking",
-  "risk_score": 82,
-  "risk_level": "RED",
+  "module": "Networking",
+  "risk_score": 82, "risk_level": "RED",
   "build_success_rate": 78,
-  "avg_clang_warnings_per_pr": 24.6,
+  "avg_clang_warnings_per_commit": 24.6,
   "warning_trend": "+38% over 4 weeks",
-  "asan_failures": 4,
-  "integration_fail_pct": 18.2,
+  "asan_failures": 4, "integration_fail_pct": 18.2,
   "avg_review_latency_hrs": 31.4,
-  "client_complaints": 5
+  "punctuality_days_late": 14,
+  "customer_issues": 5
 }
 ```
 
 ### prompts/team_report.txt
 
 ```
-You are an Engineering Director writing a management report.
+You are an Engineering Director writing a management report for a {role}.
 
-Team context:
+Context (JSON):
 {context}
 
-Write a concise executive report with exactly these four sections:
+Write a concise report with exactly these sections:
 
 ## Executive Summary
-2-3 sentences. State the team's overall health and the single most important risk.
+2-3 sentences: overall health and the single most important risk.
 
 ## Key Risks
-List 3–4 specific risks with supporting numbers from the context.
+3–4 specific risks with supporting numbers from the context.
 
 ## Root Causes
-What is likely driving the degradation? Be specific.
+What is driving the degradation? Be specific.
 
 ## Recommended Actions
-3–4 concrete, prioritised actions the manager should take this week.
+3–4 concrete, prioritised actions for this week.
 
-Be direct. Use numbers. No filler sentences.
+Match the depth to the role: Unit Head = business framing, Project Manager =
+delivery + risk, Team Lead = technical specifics with commit-level evidence.
+Be direct. Use numbers. No filler.
 ```
 
 ### prompts/copilot.txt
 
 ```
-You are an AI engineering management copilot assisting a senior engineering director.
+You are an AI engineering management copilot.
 
-Current organisation context:
+Current organisation context (JSON):
 {context}
 
-Answer questions concisely and with specific data from the context.
-If asked to compare teams, use numbers. If asked for recommendations, be concrete.
-Do not make up data that is not in the context. If something is unknown, say so.
+Answer concisely with specific data from the context. Use numbers for comparisons.
+If asked which commit caused a customer issue, use the customer→commit trace.
+Do not invent data. If something is unknown, say so.
 ```
 
 ---
 
-## Two-Day Implementation Plan
+## Build Plan — DB-First, Incremental
 
-### Day 1 — Data + Analytics + Dashboard (Goal: data → charts working end-to-end)
+Each step leaves a runnable, visible app.
 
-| Time | Task | Done when |
+| Step | Goal | Done when |
 |---|---|---|
-| Hour 0–1 | Project setup: create folder structure, install deps, write SQLite schema, init `engineering.db` | `engineering.db` exists with all tables and view |
-| Hour 1–3 | Write `generate_data.py` with all 8 team storylines using lerp-based trend generation | DB has ~8 teams × 12 weeks × 8 PRs = ~768 PR event rows |
-| Hour 3–5 | Write `analytics.py`: `get_team_health()`, `get_team_trends()`, `get_org_summary()`, `compare_teams()` | Functions return correct dicts, manually spot-checked in a Python shell |
-| Hour 5–6 | Write `risk_engine.py` with corrected formula | Each team shows a plausible GREEN / AMBER / RED and score |
-| Hour 6–9 | Build Streamlit pages 1 (overview) and 2 (team explorer) with charts | Dashboard loads, KPI cards correct, trend charts render, team dropdown works |
-| Hour 9–10 | End-to-end check: run `generate_data.py` → open dashboard → verify all charts | No errors in console, charts show expected storyline trends |
-
-### Day 2 — LLM + Reports + Chat (Goal: full 4-page demo-ready app)
-
-| Time | Task | Done when |
-|---|---|---|
-| **Hour 0** | **FIRST: start vLLM server + model download. Do this before writing any code.** | `curl localhost:8000/health` returns 200 |
-| Hour 1–2 | Write `llm_service.py`, `prompts/team_report.txt`, `prompts/copilot.txt` | Test call from Python shell returns coherent text |
-| Hour 2–5 | Build page 3 (AI Reports): team/org selector, generate button, spinner, rendered output | Full Networking team report generates in < 30s |
-| Hour 5–7 | Build page 4 (Management Copilot): chat input, message history, context injection | "Which team is at risk?" returns a correct, data-grounded answer |
-| Hour 7–9 | Polish: loading spinners, LLM timeout handling (`try/except`), clean up chart titles and labels | No crashes during a full demo run |
-| Hour 9–10 | Write demo script, prepare PPT, rehearse the 5-minute walkthrough | You know exactly what to click in what order |
-
-### Day 2 Risk: vLLM Startup Time
-
-The model download is ~15 GB and can take 20–40 minutes on a slow connection.
-**Start it the night before Day 2** if possible. Everything else on Day 2 can be
-written while the model is loading — `llm_service.py` and the prompt templates do
-not require the server to be running.
+| **1. Database first** | `schema.sql` + `database.py` + `generate_data.py` → central `engineering.db` | Tables/views exist; `generate_data.py` seeds units/projects/modules/engineers/commits/review_comments/customers/customer_issues; row counts spot-checked |
+| **2. Streamlit viewer** | `app.py` + a page that renders raw tables | `streamlit run app.py` loads; module picker shows that module's commits + `weekly_summary` |
+| **3. Analytics + risk** | `analytics.py` + `risk_engine.py` on the new grain | Each module yields a plausible GREEN/AMBER/RED matching its storyline; punctuality + customer-impact + customer→commit trace return correct dicts |
+| **4. Role-based pages + charts** | Unit Head / Project Manager / Team Lead pages | All three render; charts show storyline trends; punctuality, per-customer counts, commit-wise comments, and customer→commit traceability all display |
+| **5. Pluggable LLM** | `config.py` + `llm_service.py` + prompts + AI Reports + Copilot pages | With Ollama running, a module report generates coherent prose; copilot answers a data-grounded question; switching config to vLLM/Qwen needs no code change |
+| **6. (Future) Real ingestion** | `ingest.py` per repo | A real repo's commits/authors/reviewers/comments land in the central DB |
 
 ---
 
 ## Future Enhancements
 
-These are intentionally excluded from the MVP but are the natural next steps:
-
 **Real data integrations**
-- GitHub / GitLab webhooks — trigger the agent on actual PR merges
-- CI/CD log ingestion — parse real clang-tidy YAML, CodeChecker JSON, ASAN stack traces, JUnit XML
-- Jira integration — link issues to code quality signals
+- Per-module git/GitHub ingestion workers (multi-repo), webhook-triggered
+- CI/CD log ingestion — real clang-tidy YAML, CodeChecker JSON, ASAN traces, JUnit XML → quality signals
+- Issue-tracker integration (Jira/Zendesk) — real customer issues + targeted delivery dates
 
 **Infrastructure**
-- PostgreSQL — replace SQLite when multiple concurrent users hit the dashboard
-- Redis — cache LLM report outputs so they do not regenerate on every page load
-- Celery / background jobs — run report generation asynchronously
+- PostgreSQL — replace SQLite for concurrent dashboard users
+- Redis — cache LLM report outputs
+- Celery / background jobs — async report + ingestion runs
 
 **Intelligence**
-- Knowledge graph — link teams, engineers, repos, and incidents
-- Vector database — semantic search over historical reports and PR comments
-- Multi-agent framework — separate agents for data collection, analysis, and report generation
-- Anomaly detection — flag sudden spikes before they become RED
+- Knowledge graph linking engineers, modules, commits, incidents
+- Vector DB — semantic search over reports and review comments
+- Anomaly detection — flag spikes before they go RED
+- Manager-vs-TL technical-depth tuning per report
 
 **LLM upgrades**
-- Upgrade to `Qwen2.5-14B-Instruct` or `Qwen2.5-32B-Instruct` once validated on ROCm
-- Fine-tune on internal engineering report examples for domain-specific language
-- Streaming output — pipe LLM tokens directly to the Streamlit chat interface
+- Promote to `Qwen2.5-14B/32B-Instruct` on ROCm once validated
+- Streaming output to the Streamlit chat
+- Fine-tune on internal report examples
 
 ---
 
-*Plan version: final — incorporates corrected schema (per-PR events + weekly view),
-fixed risk formula (dimensionally consistent), Streamlit dashboard, vLLM + Qwen2.5-7B,
-and hour-by-hour 2-day schedule.*
+*Plan version: merged — incorporates `arch.md` (unit→project→module→commit hierarchy,
+author/reviewer, first-class review comments with severity, targeted-vs-actual delivery /
+punctuality, separate customer DB with commit-id traceability, role-based Unit Head / Project
+Manager / Team Lead dashboards, per-module ingestion agents → central DB) with the original MVP's
+synthetic-data, analytics, risk, Streamlit, and pluggable-LLM design. Decisions locked: SQLite
+central DB, synthetic-but-git-ready, multi-repo, generic modules, Ollama-now/vLLM-later LLM,
+DB-first incremental build.*
