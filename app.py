@@ -53,7 +53,7 @@ if hi:
               f"({hi['risk_level']})")
 if lo:
     cc2.success(f"**Fastest improving:** {lo['module']} — "
-                f"clang {lo['warning_trend']}")
+                f"quality {lo['quality_trend']}")
 cc3.info(f"**Customer issues (all time):** {org['total_customer_issues']}")
 
 st.divider()
@@ -62,14 +62,14 @@ st.divider()
 st.subheader("Module rankings by risk")
 import pandas as pd
 
-cols = ["module", "project", "unit", "risk_level", "risk_score",
-        "build_success_rate", "avg_clang_warnings_per_commit",
-        "punctuality_days_late", "customer_issues", "warning_trend"]
+cols = ["module", "type", "project", "risk_level", "risk_score",
+        "build_success_rate", "quality_risk",
+        "punctuality_days_late", "customer_issues", "quality_trend"]
 df = pd.DataFrame(ranks)[cols].rename(columns={
     "risk_score": "risk", "build_success_rate": "build %",
-    "avg_clang_warnings_per_commit": "clang/commit",
+    "quality_risk": "quality risk",
     "punctuality_days_late": "days late", "customer_issues": "cust. issues",
-    "warning_trend": "clang trend"})
+    "quality_trend": "quality trend"})
 st.dataframe(ui.style_risk_level(df), width="stretch", hide_index=True)
 
 # --- Risk bar chart -------------------------------------------------------

@@ -1,13 +1,13 @@
-"""Seed the central engineering.db with synthetic, git-shaped data.
+"""Seed the central engineering.db with synthetic, git-shaped, type-aware data.
 
-This simulates the per-module ingestion agents: for each module (a repo) it
-fabricates ~8 commits/week over 12 weeks, each with an author, a reviewer, a few
-review comments (with severity), CI/quality signals trending along the module's
-storyline, and planned-vs-actual delivery. It then creates 3 customers and a set
-of customer issues, a subset of which point at REAL generated commit ids in the
-worst-quality modules so the customer->commit traceability demo lights up.
+Each module is a repo of a given TYPE (network/backend/frontend/ai) and follows a
+storyline via a 0..1 "severity" trajectory. For each commit we emit shared process
+signals (build, integration, review, delivery) plus that module type's own quality
+metrics (from METRIC_CATALOG) into commit_metrics. Engineers belong to a module's
+team; one is the team lead. A subset of customer issues point at real commit ids in
+the worst modules so the customer->commit traceability demo lights up.
 
-Run once:  python generate_data.py
+Run once:  python src/generate_data.py
 """
 
 import random
@@ -26,8 +26,6 @@ COMMITS_PER_WEEK = 8
 BASE_DATE = datetime(2025, 1, 6)  # a Monday; W01 starts here
 
 # --- Organisation: 2 units -> 4 projects -> 8 modules --------------------
-# Each module is its own repo (multi-repo) and follows a storyline so trends
-# are meaningful, not noise.
 ORG = [
     {
         "unit": "Infrastructure", "head": "Alice Nguyen",
@@ -49,42 +47,72 @@ ORG = [
     },
 ]
 
-# Per-module storyline + metadata. build/clang interpolate start->end over 12 wks.
-# asan_rate / issue_rate are per-commit probabilities. late_days drives punctuality.
-# major_rate is the share of review comments marked 'major'.
+# Per-module storyline. build_* interpolate build-success start->end over 12 wks.
+# qual_* are a 0..1 quality SEVERITY trajectory (1 = worst) that drives every
+# type-specific metric. late_days -> punctuality, latency -> review hours,
+# major_rate -> share of major comments, issue_rate -> customer-issue probability.
 MODULE_CONFIGS = {
-    "Networking":  {"type": "network",  "team_size": 7, "lead": "Grace Liu",
-                    "build_start": 0.93, "build_end": 0.68, "clang_start": 20, "clang_end": 160,
-                    "asan_rate": 0.22, "issue_rate": 0.28, "late_days": 15, "major_rate": 0.50,
-                    "latency": 34},
-    "Auth":        {"type": "backend",  "team_size": 5, "lead": "Hassan Ali",
-                    "build_start": 0.82, "build_end": 0.55, "clang_start": 40, "clang_end": 130,
-                    "asan_rate": 0.55, "issue_rate": 0.35, "late_days": 11, "major_rate": 0.55,
-                    "latency": 34},
-    "Security":    {"type": "backend",  "team_size": 6, "lead": "Ivy Chen",
-                    "build_start": 0.88, "build_end": 0.97, "clang_start": 60, "clang_end": 12,
-                    "asan_rate": 0.02, "issue_rate": 0.03, "late_days": 1,  "major_rate": 0.30,
-                    "latency": 14},
-    "Platform":    {"type": "backend",  "team_size": 8, "lead": "Jack Owens",
-                    "build_start": 0.97, "build_end": 0.98, "clang_start": 10, "clang_end": 9,
-                    "asan_rate": 0.01, "issue_rate": 0.01, "late_days": 0,  "major_rate": 0.20,
-                    "latency": 10},
-    "Cloud":       {"type": "backend",  "team_size": 6, "lead": "Kara Singh",
-                    "build_start": 0.95, "build_end": 0.93, "clang_start": 22, "clang_end": 40,
-                    "asan_rate": 0.05, "issue_rate": 0.08, "late_days": 4,  "major_rate": 0.35,
-                    "latency": 22},
-    "ML Pipeline": {"type": "ai",       "team_size": 4, "lead": "Leo Martins",
-                    "build_start": 0.80, "build_end": 0.84, "clang_start": 25, "clang_end": 45,
-                    "asan_rate": 0.12, "issue_rate": 0.12, "late_days": 16, "major_rate": 0.40,
-                    "latency": 36},
-    "Backend":     {"type": "backend",  "team_size": 6, "lead": "Mia Rossi",
-                    "build_start": 0.90, "build_end": 0.90, "clang_start": 28, "clang_end": 30,
-                    "asan_rate": 0.06, "issue_rate": 0.06, "late_days": 3,  "major_rate": 0.30,
-                    "latency": 20},
-    "UI/UX":       {"type": "frontend", "team_size": 5, "lead": "Noah Berg",
-                    "build_start": 0.93, "build_end": 0.86, "clang_start": 15, "clang_end": 28,
-                    "asan_rate": 0.03, "issue_rate": 0.05, "late_days": 6,  "major_rate": 0.25,
-                    "latency": 26},
+    "Networking":  {"type": "network",  "team_size": 7,
+                    "build_start": 0.93, "build_end": 0.68,
+                    "qual_start": 0.20, "qual_end": 0.85,
+                    "late_days": 15, "latency": 34, "major_rate": 0.50, "issue_rate": 0.28},
+    "Auth":        {"type": "backend",  "team_size": 5,
+                    "build_start": 0.82, "build_end": 0.55,
+                    "qual_start": 0.45, "qual_end": 0.92,
+                    "late_days": 11, "latency": 34, "major_rate": 0.55, "issue_rate": 0.35},
+    "Security":    {"type": "backend",  "team_size": 6,
+                    "build_start": 0.88, "build_end": 0.97,
+                    "qual_start": 0.60, "qual_end": 0.12,
+                    "late_days": 1, "latency": 14, "major_rate": 0.30, "issue_rate": 0.03},
+    "Platform":    {"type": "backend",  "team_size": 8,
+                    "build_start": 0.97, "build_end": 0.98,
+                    "qual_start": 0.06, "qual_end": 0.05,
+                    "late_days": 0, "latency": 10, "major_rate": 0.20, "issue_rate": 0.01},
+    "Cloud":       {"type": "backend",  "team_size": 6,
+                    "build_start": 0.95, "build_end": 0.93,
+                    "qual_start": 0.22, "qual_end": 0.45,
+                    "late_days": 4, "latency": 22, "major_rate": 0.35, "issue_rate": 0.08},
+    "ML Pipeline": {"type": "ai",       "team_size": 4,
+                    "build_start": 0.80, "build_end": 0.84,
+                    "qual_start": 0.35, "qual_end": 0.55,
+                    "late_days": 16, "latency": 36, "major_rate": 0.40, "issue_rate": 0.12},
+    "Backend":     {"type": "backend",  "team_size": 6,
+                    "build_start": 0.90, "build_end": 0.90,
+                    "qual_start": 0.30, "qual_end": 0.33,
+                    "late_days": 3, "latency": 20, "major_rate": 0.30, "issue_rate": 0.06},
+    "UI/UX":       {"type": "frontend", "team_size": 5,
+                    "build_start": 0.93, "build_end": 0.86,
+                    "qual_start": 0.20, "qual_end": 0.50,
+                    "late_days": 6, "latency": 26, "major_rate": 0.25, "issue_rate": 0.05},
+}
+
+# Type-aware quality metrics: (metric, label, unit, higher_is_better, weight, good, bad).
+# good -> ~0 risk, bad -> ~100 risk. Weights per type sum to ~1.0.
+METRIC_CATALOG = {
+    "network": [
+        ("clang_warnings", "Clang warnings / commit", "count", 0, 0.35, 10, 120),
+        ("asan_failures", "ASAN failures / commit", "count", 0, 0.30, 0, 3),
+        ("codechecker_critical", "CodeChecker criticals", "count", 0, 0.20, 0, 6),
+        ("compile_warnings", "Compile warnings / commit", "count", 0, 0.15, 5, 90),
+    ],
+    "backend": [
+        ("lint_errors", "Lint errors / commit", "count", 0, 0.25, 2, 40),
+        ("test_coverage_pct", "Test coverage", "%", 1, 0.30, 85, 50),
+        ("api_error_rate_pct", "API error rate", "%", 0, 0.25, 0.5, 5),
+        ("sast_findings", "SAST findings", "count", 0, 0.20, 0, 10),
+    ],
+    "frontend": [
+        ("eslint_errors", "ESLint errors / commit", "count", 0, 0.25, 2, 50),
+        ("accessibility_score", "Accessibility score", "score", 1, 0.25, 95, 70),
+        ("lighthouse_perf", "Lighthouse performance", "score", 1, 0.25, 90, 50),
+        ("bundle_size_kb", "Bundle size", "KB", 0, 0.25, 200, 1200),
+    ],
+    "ai": [
+        ("eval_accuracy_pct", "Eval accuracy", "%", 1, 0.35, 92, 70),
+        ("data_validation_failures", "Data validation failures", "count", 0, 0.25, 0, 10),
+        ("model_drift", "Model drift", "ratio", 0, 0.25, 0.02, 0.3),
+        ("train_minutes", "Training time", "min", 0, 0.15, 20, 240),
+    ],
 }
 
 CUSTOMERS = ["Acme Corp", "Globex", "Initech"]
@@ -124,8 +152,26 @@ def lerp(a, b, t):
     return a + (b - a) * t
 
 
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
 def fake_sha():
     return "".join(random.choice("0123456789abcdef") for _ in range(12))
+
+
+def metric_value(good, bad, sev, unit):
+    """A per-commit metric value at severity sev (0..1), respecting unit + noise."""
+    v = good + (bad - good) * sev + random.gauss(0, abs(bad - good) * 0.08)
+    if unit == "count":
+        return float(max(0, round(v)))
+    if unit == "ratio":
+        return round(clamp(v, 0.0, 1.0), 3)
+    if unit in ("KB", "min"):
+        return float(max(0, round(v)))
+    if unit in ("%", "score"):
+        return round(clamp(v, 0.0, 100.0), 1)
+    return round(max(0.0, v), 2)
 
 
 def main():
@@ -133,16 +179,19 @@ def main():
     database.init_schema(conn)
     cur = conn.cursor()
 
-    # --- Engineers pool ---------------------------------------------------
-    engineer_ids = []
-    for _ in range(24):
-        cur.execute("INSERT INTO engineers (name) VALUES (?)", (fake.name(),))
-        engineer_ids.append(cur.lastrowid)
+    # --- Metric catalog ---------------------------------------------------
+    for mtype, metrics in METRIC_CATALOG.items():
+        for (metric, label, unit, hib, weight, good, bad) in metrics:
+            cur.execute(
+                "INSERT INTO metric_catalog (metric, module_type, label, unit, "
+                "higher_is_better, weight, good, bad) VALUES (?,?,?,?,?,?,?,?)",
+                (metric, mtype, label, unit, hib, weight, good, bad))
 
-    # --- Hierarchy + commits ---------------------------------------------
-    total_commits = 0
-    total_comments = 0
-    module_commit_ids = {}  # module_name -> list of (commit_id, week_idx, build_success)
+    total_commits = total_comments = total_metrics = 0
+    total_engineers = 0
+    all_engineer_ids = []                 # global pool (for cross-team reviewers)
+    module_engineers = {}                 # module_name -> [engineer_id, ...]
+    module_commit_ids = {}                # module_name -> [(sha, week_idx, build_ok)]
 
     for unit in ORG:
         cur.execute("INSERT INTO units (name, head) VALUES (?, ?)",
@@ -158,23 +207,40 @@ def main():
             for mod_name in proj["modules"]:
                 cfg = MODULE_CONFIGS[mod_name]
                 repo = mod_name.lower().replace(" ", "-").replace("/", "-")
+                # Insert module first (team_lead_id filled after engineers exist).
                 cur.execute(
                     "INSERT INTO modules (project_id, name, type, repo_url, "
-                    "team_lead, team_size) VALUES (?, ?, ?, ?, ?, ?)",
+                    "team_lead_id, team_size) VALUES (?, ?, ?, ?, NULL, ?)",
                     (project_id, mod_name, cfg["type"],
-                     f"https://git.example/{repo}.git", cfg["lead"], cfg["team_size"]))
+                     f"https://git.example/{repo}.git", cfg["team_size"]))
                 module_id = cur.lastrowid
-                module_commit_ids[mod_name] = []
 
+                # Team: team_size engineers belonging to this module.
+                team = []
+                for _ in range(cfg["team_size"]):
+                    cur.execute(
+                        "INSERT INTO engineers (name, module_id) VALUES (?, ?)",
+                        (fake.name(), module_id))
+                    team.append(cur.lastrowid)
+                total_engineers += len(team)
+                module_engineers[mod_name] = team
+                all_engineer_ids.extend(team)
+                # First team member is the lead.
+                cur.execute("UPDATE modules SET team_lead_id = ? WHERE id = ?",
+                            (team[0], module_id))
+
+                module_commit_ids[mod_name] = []
+                catalog = METRIC_CATALOG[cfg["type"]]
                 pr_seq = 0
                 for w in range(WEEKS):
                     t = w / (WEEKS - 1)
                     build_prob = lerp(cfg["build_start"], cfg["build_end"], t)
-                    clang_base = lerp(cfg["clang_start"], cfg["clang_end"], t)
+                    sev_base = lerp(cfg["qual_start"], cfg["qual_end"], t)
 
                     for _ in range(COMMITS_PER_WEEK):
                         pr_seq += 1
                         sha = fake_sha()
+                        sev = clamp(sev_base + random.gauss(0, 0.05), 0.0, 1.0)
                         committed_at = BASE_DATE + timedelta(
                             days=w * 7 + random.randint(0, 6),
                             hours=random.randint(0, 23))
@@ -184,10 +250,14 @@ def main():
                         actual = targeted + timedelta(days=days_late)
 
                         build_success = 1 if random.random() < build_prob else 0
-                        clang = max(0, int(random.gauss(clang_base, clang_base * 0.15)))
-                        author_id = random.choice(engineer_ids)
-                        reviewer_id = random.choice(
-                            [e for e in engineer_ids if e != author_id])
+                        author_id = random.choice(team)
+                        # Reviewer: usually a teammate, occasionally cross-team.
+                        if random.random() < 0.15 and len(all_engineer_ids) > 1:
+                            reviewer_id = random.choice(
+                                [e for e in all_engineer_ids if e != author_id])
+                        else:
+                            reviewer_id = random.choice(
+                                [e for e in team if e != author_id] or [author_id])
                         integ_total = random.randint(40, 80)
                         integ_failed = (random.randint(0, 5) if build_prob > 0.85
                                         else random.randint(3, 12))
@@ -196,31 +266,30 @@ def main():
                             "INSERT INTO commits (commit_id, pr_id, module_id, "
                             "project_id, unit_id, week, committed_at, author_id, "
                             "reviewer_id, targeted_delivery, actual_delivery, "
-                            "build_success, compile_warnings, clang_warnings, "
-                            "codechecker_findings, codechecker_critical, asan_failures, "
-                            "integration_total, integration_failed, review_latency_hours, "
-                            "lines_changed) VALUES "
-                            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "build_success, integration_total, integration_failed, "
+                            "review_latency_hours, lines_changed) VALUES "
+                            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                             (sha, f"{mod_name[:3].upper()}-PR-{pr_seq:04d}", module_id,
                              project_id, unit_id, f"W{w+1:02d}",
                              committed_at.isoformat(timespec="seconds"),
                              author_id, reviewer_id,
                              targeted.date().isoformat(), actual.date().isoformat(),
-                             build_success,
-                             max(0, int(random.gauss(clang * 0.3, 2))),
-                             clang,
-                             max(0, int(random.gauss(clang * 0.4, 3))),
-                             max(0, int(random.gauss(clang * 0.05, 1))),
-                             1 if random.random() < cfg["asan_rate"] else 0,
-                             integ_total, integ_failed,
+                             build_success, integ_total, integ_failed,
                              max(1.0, random.gauss(cfg["latency"], 8)),
                              random.randint(50, 800)))
                         total_commits += 1
                         module_commit_ids[mod_name].append((sha, w, build_success))
 
-                        # Review comments (first-class rows, with severity)
-                        n_comments = max(0, int(random.gauss(3, 2)))
-                        for _ in range(n_comments):
+                        # Type-specific quality metrics for this commit.
+                        for (metric, _l, unit_, _h, _w, good, bad) in catalog:
+                            cur.execute(
+                                "INSERT INTO commit_metrics (commit_id, metric, value) "
+                                "VALUES (?,?,?)",
+                                (sha, metric, metric_value(good, bad, sev, unit_)))
+                            total_metrics += 1
+
+                        # Review comments (first-class rows, with severity).
+                        for _ in range(max(0, int(random.gauss(3, 2)))):
                             severity = ("major" if random.random() < cfg["major_rate"]
                                         else "minor")
                             cur.execute(
@@ -238,7 +307,6 @@ def main():
         cur.execute("INSERT INTO customers (name) VALUES (?)", (name,))
         customer_ids.append(cur.lastrowid)
 
-    # Look up module/project ids for issue rows.
     mod_lookup = {r["name"]: (r["id"], r["project_id"])
                   for r in conn.execute(
                       "SELECT id, name, project_id FROM modules").fetchall()}
@@ -247,9 +315,7 @@ def main():
     severities = ["low", "medium", "high", "critical"]
     for mod_name, cfg in MODULE_CONFIGS.items():
         module_id, project_id = mod_lookup[mod_name]
-        commits = module_commit_ids[mod_name]
-        for (sha, w, build_success) in commits:
-            # Issues cluster on later weeks and worse builds; tie to a real commit.
+        for (sha, w, build_success) in module_commit_ids[mod_name]:
             prob = cfg["issue_rate"] * (0.4 + w / WEEKS)
             if build_success == 0:
                 prob *= 1.8
@@ -272,8 +338,9 @@ def main():
     conn.close()
 
     print("Seeded central engineering.db:")
-    print(f"  engineers       : {len(engineer_ids)}")
+    print(f"  engineers       : {total_engineers} (across teams)")
     print(f"  commits         : {total_commits}")
+    print(f"  commit_metrics  : {total_metrics}")
     print(f"  review_comments : {total_comments}")
     print(f"  customers       : {len(customer_ids)}")
     print(f"  customer_issues : {total_issues}")

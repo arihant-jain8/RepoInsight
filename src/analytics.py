@@ -1,8 +1,8 @@
-"""Analytics engine: turn raw commits into role-ready metrics.
+"""Analytics engine: turn raw commits into role-ready, type-aware metrics.
 
-Reads through database.query / database.query_df (each opens its own connection,
-so no connection is threaded through these functions). Feeds the risk engine,
-the dashboards, and the LLM context builder.
+Reads through database.query / database.query_df (each opens its own connection).
+Quality signals are per module TYPE (from commit_metrics + metric_catalog); shared
+process signals (build, integration, review, delivery) come from commits.
 """
 
 import database
@@ -13,7 +13,6 @@ import risk_engine
 # Helpers
 # -------------------------------------------------------------------------
 def _all_weeks() -> list[str]:
-    """Distinct week labels present in the data, ascending (e.g. W01..W12)."""
     return [r["week"] for r in
             database.query("SELECT DISTINCT week FROM commits ORDER BY week")]
 
@@ -27,6 +26,15 @@ def _placeholders(items) -> str:
     return ",".join("?" for _ in items)
 
 
+def get_metric_catalog(module_type: str | None = None) -> list[dict]:
+    """Metric definitions, optionally for one module type."""
+    if module_type:
+        return database.query(
+            "SELECT * FROM metric_catalog WHERE module_type = ? ORDER BY weight DESC",
+            (module_type,))
+    return database.query("SELECT * FROM metric_catalog ORDER BY module_type, weight DESC")
+
+
 # -------------------------------------------------------------------------
 # Module-level
 # -------------------------------------------------------------------------
@@ -36,25 +44,31 @@ def get_module_health(module_id: int, weeks: int = 4) -> dict:
     ph = _placeholders(wks)
 
     meta = database.query(
-        "SELECT m.id, m.name, m.type, m.team_lead, m.team_size, "
+        "SELECT m.id, m.name, m.type, m.team_size, e.name AS team_lead, "
         "p.id AS project_id, p.name AS project, u.id AS unit_id, u.name AS unit "
         "FROM modules m JOIN projects p ON p.id = m.project_id "
-        "JOIN units u ON u.id = p.unit_id WHERE m.id = ?",
+        "JOIN units u ON u.id = p.unit_id "
+        "LEFT JOIN engineers e ON e.id = m.team_lead_id WHERE m.id = ?",
         (module_id,),
     )[0]
 
     agg = database.query(
         f"SELECT COUNT(*) AS commits, "
         f"ROUND(100.0 * SUM(build_success) / COUNT(*), 1) AS build_success_rate, "
-        f"ROUND(AVG(clang_warnings), 1) AS avg_clang_warnings_per_commit, "
-        f"ROUND(AVG(asan_failures), 3) AS avg_asan_per_commit, "
-        f"SUM(asan_failures) AS total_asan_failures, "
         f"ROUND(100.0 * SUM(integration_failed) / "
         f"      NULLIF(SUM(integration_total), 0), 1) AS integration_fail_pct, "
         f"ROUND(AVG(review_latency_hours), 1) AS avg_review_latency_hours "
         f"FROM commits WHERE module_id = ? AND week IN ({ph})",
         (module_id, *wks),
     )[0]
+
+    # Type-specific quality metrics: avg per metric over the window.
+    quality_metrics = {r["metric"]: r["v"] for r in database.query(
+        f"SELECT cm.metric, ROUND(AVG(cm.value), 3) AS v FROM commit_metrics cm "
+        f"JOIN commits c ON c.commit_id = cm.commit_id "
+        f"WHERE c.module_id = ? AND c.week IN ({ph}) GROUP BY cm.metric",
+        (module_id, *wks),
+    )}
 
     # Share of commits in the window that merged with zero review comments.
     unrev = database.query(
@@ -67,7 +81,6 @@ def get_module_health(module_id: int, weeks: int = 4) -> dict:
         (module_id, *wks),
     )[0]["unreviewed_pct"]
 
-    # Major / minor comment counts in the window.
     sev = {r["severity"]: r["n"] for r in database.query(
         f"SELECT rc.severity, COUNT(*) AS n FROM review_comments rc "
         f"JOIN commits c ON c.commit_id = rc.commit_id "
@@ -75,18 +88,21 @@ def get_module_health(module_id: int, weeks: int = 4) -> dict:
         (module_id, *wks),
     )}
 
-    # Clang trend across the window: first window-week vs last window-week.
-    trend = database.query(
-        f"SELECT week, ROUND(AVG(clang_warnings), 1) AS avg_clang "
-        f"FROM commits WHERE module_id = ? AND week IN ({ph}) "
-        f"GROUP BY week ORDER BY week",
-        (module_id, *wks),
-    )
-    if len(trend) >= 2 and trend[0]["avg_clang"]:
-        delta = (trend[-1]["avg_clang"] - trend[0]["avg_clang"]) / trend[0]["avg_clang"]
-        warning_trend = f"{delta * 100:+.0f}% over {len(trend)} weeks"
-    else:
-        warning_trend = "n/a"
+    # Quality trend: weighted quality risk in the first vs last window-week.
+    byweek = {}
+    for r in database.query(
+        f"SELECT week, metric, avg_value FROM metric_weekly "
+        f"WHERE module_id = ? AND week IN ({ph}) ORDER BY week", (module_id, *wks)):
+        byweek.setdefault(r["week"], {})[r["metric"]] = r["avg_value"]
+    weeks_sorted = sorted(byweek)
+    quality_trend = "n/a"
+    if len(weeks_sorted) >= 2:
+        q0, _ = risk_engine.quality_risk(meta["type"], byweek[weeks_sorted[0]])
+        q1, _ = risk_engine.quality_risk(meta["type"], byweek[weeks_sorted[-1]])
+        if q0 > 0:
+            quality_trend = f"{(q1 - q0) / q0 * 100:+.0f}% over {len(weeks_sorted)} weeks"
+        else:
+            quality_trend = "flat" if q1 == 0 else f"rising (from ~0)"
 
     punctuality = database.query(
         "SELECT avg_days_late FROM punctuality WHERE module_id = ?", (module_id,))
@@ -97,41 +113,42 @@ def get_module_health(module_id: int, weeks: int = 4) -> dict:
         (module_id,))[0]["n"]
 
     return {
-        "module_id": meta["id"],
-        "name": meta["name"],
-        "type": meta["type"],
-        "team_lead": meta["team_lead"],
-        "team_size": meta["team_size"],
-        "project_id": meta["project_id"],
-        "project": meta["project"],
-        "unit_id": meta["unit_id"],
-        "unit": meta["unit"],
-        "window_weeks": len(wks),
-        "commits": agg["commits"],
+        "module_id": meta["id"], "name": meta["name"], "type": meta["type"],
+        "team_lead": meta["team_lead"], "team_size": meta["team_size"],
+        "project_id": meta["project_id"], "project": meta["project"],
+        "unit_id": meta["unit_id"], "unit": meta["unit"],
+        "window_weeks": len(wks), "commits": agg["commits"],
         "build_success_rate": agg["build_success_rate"] or 0.0,
-        "avg_clang_warnings_per_commit": agg["avg_clang_warnings_per_commit"] or 0.0,
-        "avg_asan_per_commit": agg["avg_asan_per_commit"] or 0.0,
-        "total_asan_failures": agg["total_asan_failures"] or 0,
         "integration_fail_pct": agg["integration_fail_pct"] or 0.0,
         "avg_review_latency_hours": agg["avg_review_latency_hours"] or 0.0,
         "unreviewed_pct": unrev or 0.0,
-        "major_comments": sev.get("major", 0),
-        "minor_comments": sev.get("minor", 0),
-        "warning_trend": warning_trend,
-        "punctuality_days_late": days_late,
-        "customer_issues": customer_issues,
+        "quality_metrics": quality_metrics,
+        "major_comments": sev.get("major", 0), "minor_comments": sev.get("minor", 0),
+        "quality_trend": quality_trend,
+        "punctuality_days_late": days_late, "customer_issues": customer_issues,
     }
 
 
-def get_module_trends(module_id: int) -> list[dict]:
-    """Week-by-week history for trend charts (from weekly_summary)."""
-    return database.query(
-        "SELECT week, commits_merged, build_success_rate, total_clang_warnings, "
-        "avg_clang_warnings_per_commit, total_asan_failures, integration_failures, "
-        "integration_fail_pct, avg_review_latency "
-        "FROM weekly_summary WHERE module_id = ? ORDER BY week",
-        (module_id,),
-    )
+def get_module_trends(module_id: int) -> dict:
+    """Week-by-week series for type-aware charts.
+
+    Returns {weeks, build: [{week, build_success_rate}],
+             metrics: [{week, metric, label, avg_value}], catalog: [...]}.
+    """
+    mtype = database.query(
+        "SELECT type FROM modules WHERE id = ?", (module_id,))[0]["type"]
+    build = database.query(
+        "SELECT week, build_success_rate, integration_fail_pct "
+        "FROM weekly_summary WHERE module_id = ? ORDER BY week", (module_id,))
+    catalog = get_metric_catalog(mtype)
+    labels = {c["metric"]: c["label"] for c in catalog}
+    metrics = database.query(
+        "SELECT week, metric, avg_value FROM metric_weekly "
+        "WHERE module_id = ? ORDER BY week", (module_id,))
+    for m in metrics:
+        m["label"] = labels.get(m["metric"], m["metric"])
+    return {"weeks": [b["week"] for b in build], "type": mtype,
+            "build": build, "metrics": metrics, "catalog": catalog}
 
 
 def get_commit_comments(module_id: int) -> list[dict]:
@@ -150,32 +167,56 @@ def get_commit_comments(module_id: int) -> list[dict]:
     )
 
 
+def get_team_members(module_id: int) -> list[dict]:
+    """Engineers on a module's team (lead flagged), with their activity."""
+    return database.query(
+        "SELECT e.id, e.name, "
+        "CASE WHEN e.id = m.team_lead_id THEN 1 ELSE 0 END AS is_lead, "
+        "(SELECT COUNT(*) FROM commits c WHERE c.author_id = e.id) AS commits_authored, "
+        "(SELECT COUNT(*) FROM commits c WHERE c.reviewer_id = e.id) AS commits_reviewed "
+        "FROM engineers e JOIN modules m ON m.id = e.module_id "
+        "WHERE e.module_id = ? ORDER BY is_lead DESC, e.name",
+        (module_id,),
+    )
+
+
 # -------------------------------------------------------------------------
-# Rankings + org summary
+# Rankings + org summary + benchmarking
 # -------------------------------------------------------------------------
 def get_all_module_rankings(weeks: int = 4) -> list[dict]:
     """All modules ranked by risk score (desc), each with health + risk."""
-    mods = database.query("SELECT id FROM modules")
     rows = []
-    for m in mods:
+    for m in database.query("SELECT id FROM modules"):
         health = get_module_health(m["id"], weeks)
         risk = risk_engine.compute_module_risk(health)
         rows.append({
-            "module_id": health["module_id"],
-            "module": health["name"],
-            "project": health["project"],
-            "unit": health["unit"],
-            "team_size": health["team_size"],
-            "risk_score": risk["score"],
-            "risk_level": risk["level"],
+            "module_id": health["module_id"], "module": health["name"],
+            "type": health["type"], "project": health["project"],
+            "unit": health["unit"], "team_size": health["team_size"],
+            "risk_score": risk["score"], "risk_level": risk["level"],
             "build_success_rate": health["build_success_rate"],
-            "avg_clang_warnings_per_commit": health["avg_clang_warnings_per_commit"],
+            "quality_risk": risk["breakdown"]["quality_risk"],
             "punctuality_days_late": health["punctuality_days_late"],
             "customer_issues": health["customer_issues"],
-            "warning_trend": health["warning_trend"],
-            "breakdown": risk["breakdown"],
+            "quality_trend": health["quality_trend"], "breakdown": risk["breakdown"],
         })
     return sorted(rows, key=lambda r: r["risk_score"], reverse=True)
+
+
+def get_type_benchmark(module_id: int, weeks: int = 4) -> dict:
+    """Rank a module among same-type peers (lower risk = better)."""
+    rankings = get_all_module_rankings(weeks)
+    me = next((r for r in rankings if r["module_id"] == module_id), None)
+    if not me:
+        return {}
+    peers = [r for r in rankings if r["type"] == me["type"]]
+    # Position from best (lowest risk). 1 = best of its type.
+    ordered = sorted(peers, key=lambda r: r["risk_score"])
+    rank = next(i for i, r in enumerate(ordered, 1) if r["module_id"] == module_id)
+    n = len(peers)
+    better_than = round(100 * (n - rank) / (n - 1)) if n > 1 else 100
+    return {"type": me["type"], "peers": n, "rank": rank,
+            "better_than_pct": better_than, "risk_score": me["risk_score"]}
 
 
 def get_org_summary(weeks: int = 4) -> dict:
@@ -189,11 +230,9 @@ def get_org_summary(weeks: int = 4) -> dict:
         sum(r["build_success_rate"] for r in rankings) / len(rankings), 1
     ) if rankings else 0.0
 
-    # Fastest-improving = most negative clang trend (e.g. "-40% over 4 weeks").
     def trend_pct(r):
-        s = r["warning_trend"].split("%")[0]
         try:
-            return float(s)
+            return float(r["quality_trend"].split("%")[0])
         except ValueError:
             return 0.0
 
@@ -202,10 +241,8 @@ def get_org_summary(weeks: int = 4) -> dict:
         "SELECT COUNT(*) AS n FROM customer_issues")[0]["n"]
 
     return {
-        "modules": len(rankings),
-        "healthy": levels["GREEN"],
-        "warning": levels["AMBER"],
-        "critical": levels["RED"],
+        "modules": len(rankings), "healthy": levels["GREEN"],
+        "warning": levels["AMBER"], "critical": levels["RED"],
         "avg_build_success": avg_build,
         "highest_risk": rankings[0] if rankings else None,
         "fastest_improving": improving[0] if improving else None,
@@ -214,12 +251,11 @@ def get_org_summary(weeks: int = 4) -> dict:
 
 
 # -------------------------------------------------------------------------
-# Punctuality + customer impact + traceability
+# Punctuality + customer impact + traceability + listings
 # -------------------------------------------------------------------------
 def get_punctuality_by_module() -> list[dict]:
-    """Avg days-late vs plan, per module (for the Unit Head view)."""
     return database.query(
-        "SELECT m.name AS module, p.name AS project, m.team_size, "
+        "SELECT m.name AS module, m.type, p.name AS project, m.team_size, "
         "pu.avg_days_late, pu.delivered "
         "FROM punctuality pu JOIN modules m ON m.id = pu.module_id "
         "JOIN projects p ON p.id = m.project_id "
@@ -228,27 +264,17 @@ def get_punctuality_by_module() -> list[dict]:
 
 
 def get_customer_impact(project_id: int | None = None) -> list[dict]:
-    """Errors reported per customer, optionally scoped to a project."""
-    if project_id is None:
-        return database.query(
-            "SELECT cu.name AS customer, COUNT(*) AS issues, "
-            "SUM(CASE WHEN ci.severity IN ('high','critical') THEN 1 ELSE 0 END) "
-            "    AS high_critical "
-            "FROM customer_issues ci JOIN customers cu ON cu.id = ci.customer_id "
-            "GROUP BY cu.id ORDER BY issues DESC"
-        )
+    where = "WHERE ci.project_id = ?" if project_id is not None else ""
+    params = (project_id,) if project_id is not None else ()
     return database.query(
         "SELECT cu.name AS customer, COUNT(*) AS issues, "
         "SUM(CASE WHEN ci.severity IN ('high','critical') THEN 1 ELSE 0 END) "
         "    AS high_critical "
         "FROM customer_issues ci JOIN customers cu ON cu.id = ci.customer_id "
-        "WHERE ci.project_id = ? GROUP BY cu.id ORDER BY issues DESC",
-        (project_id,),
-    )
+        f"{where} GROUP BY cu.id ORDER BY issues DESC", params)
 
 
 def get_customer_trace(project_id: int | None = None) -> list[dict]:
-    """Customer issue -> commit -> author/module lineage, optionally per project."""
     if project_id is None:
         return database.query(
             "SELECT * FROM customer_trace ORDER BY issue_severity DESC")
@@ -269,7 +295,10 @@ def list_projects() -> list[dict]:
 
 def list_modules() -> list[dict]:
     return database.query(
-        "SELECT m.id, m.name, m.team_lead, p.name AS project, u.name AS unit "
+        "SELECT m.id, m.name, m.type, e.name AS team_lead, "
+        "p.name AS project, u.name AS unit "
         "FROM modules m JOIN projects p ON p.id = m.project_id "
-        "JOIN units u ON u.id = p.unit_id ORDER BY u.name, p.name, m.name"
+        "JOIN units u ON u.id = p.unit_id "
+        "LEFT JOIN engineers e ON e.id = m.team_lead_id "
+        "ORDER BY u.name, p.name, m.name"
     )

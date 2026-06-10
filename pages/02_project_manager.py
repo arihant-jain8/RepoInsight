@@ -48,10 +48,10 @@ st.divider()
 # --- Module health in this project ---------------------------------------
 st.subheader("Modules in this project")
 mdf = pd.DataFrame([{
-    "module": r["module"], "risk_level": r["risk_level"],
+    "module": r["module"], "type": r["type"], "risk_level": r["risk_level"],
     "risk": r["risk_score"], "build %": r["build_success_rate"],
     "days late": r["punctuality_days_late"], "cust. issues": r["customer_issues"],
-    "clang trend": r["warning_trend"],
+    "quality trend": r["quality_trend"],
 } for r in ranks])
 st.dataframe(ui.style_risk_level(mdf), width="stretch", hide_index=True)
 

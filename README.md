@@ -98,12 +98,19 @@ The sidebar lists these views:
 | **Executive Overview** (home) | Everyone | Org KPIs, risk-ranked modules, highest-risk / fastest-improving callouts, raw-table browser |
 | **🏢 Unit Head** | Non-technical, org-wide | Code-quality bars with team size, punctuality, customer-reported errors |
 | **📋 Project Manager** | One project | Module risk, major/minor review comments, **customer issue → commit traceability** |
-| **🛠️ Team Lead** | One module | Per-commit drill-down, trend charts, reviewer load, commits behind customer issues |
+| **🛠️ Team Lead** | One module | Type-specific quality metrics, per-commit drill-down, trend charts, team roster, same-type benchmark, commits behind customer issues |
 | **📝 AI Reports** | Any | Generate a role-aware report for a module / project / org, and download it as Markdown |
 | **💬 Management Copilot** | Any | Tool-using **agent** — queries the live DB (analytics + read-only SQL) to answer, and shows the tools it called |
 
 Each role page also has an inline **🧠 Generate AI insight** button that writes a
 report for that page's data, right next to its charts.
+
+**Type-aware quality:** each module has a `type` (network / backend / frontend / ai)
+and is scored on that type's own metrics (clang/ASAN for network; ESLint/accessibility/
+Lighthouse/bundle for frontend; coverage/lint/API-error/SAST for backend; eval-accuracy/
+drift for ai) via `metric_catalog` + `commit_metrics`. Modules are benchmarked against
+**same-type** peers. Engineers belong to a module's team, so "who's on the UI/UX team"
+is a real answer.
 
 ### AI behaviour (works with or without a model)
 

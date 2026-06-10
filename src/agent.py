@@ -151,6 +151,18 @@ def _t_run_sql(query: str = "", **_):
         return {"error": str(e)}
 
 
+def _t_team_members(module_name: str = "", **_):
+    m = _resolve_module(module_name)
+    if not m:
+        return {"error": f"Unknown module '{module_name}'.",
+                "available": [x["name"] for x in analytics.list_modules()]}
+    return analytics.get_team_members(m["id"])
+
+
+def _t_metric_catalog(module_type: str = "", **_):
+    return analytics.get_metric_catalog(module_type or None)
+
+
 _DISPATCH = {
     "list_modules": _t_list_modules,
     "list_projects": _t_list_projects,
@@ -161,6 +173,8 @@ _DISPATCH = {
     "get_commit_comments": _t_commit_comments,
     "get_customer_impact": _t_customer_impact,
     "trace_customer_issues": _t_trace_customer_issues,
+    "get_team_members": _t_team_members,
+    "get_metric_catalog": _t_metric_catalog,
     "run_sql": _t_run_sql,
 }
 
@@ -196,6 +210,12 @@ TOOLS = [
           "(which commit caused which customer issue, with each issue's severity). "
           "Optionally scope to a project and/or a single module.",
           {**_PROJECT_ARG, **_MODULE_ARG}),
+    _tool("get_team_members", "List the engineers on a module's team (lead flagged), with "
+          "how many commits each authored/reviewed.", _MODULE_ARG, ["module_name"]),
+    _tool("get_metric_catalog", "The quality metrics that define a module type "
+          "(label, unit, direction, good/bad thresholds). Pass module_type to scope.",
+          {"module_type": {"type": "string",
+                           "description": "network | backend | frontend | ai"}}),
     _tool("run_sql", "Run a single READ-ONLY SQL SELECT against the database for anything the "
           "other tools don't cover. Returns columns + rows.",
           {"query": {"type": "string", "description": "A single SELECT statement."}},
@@ -250,6 +270,27 @@ def _prompt() -> str:
         return f.read()
 
 
+# --- SQL guardrail: never surface raw SQL in the app ---------------------
+_SQL_FENCE = re.compile(r"```[\s\S]*?```")
+_SQL_LINE = re.compile(r"(?im)^\s*(?:SELECT|WITH)\b.*$")
+
+
+def _scrub_sql(text: str) -> str:
+    """Strip fenced code blocks and standalone SQL lines from a user-facing answer."""
+    text = _SQL_FENCE.sub("", text)
+    text = _SQL_LINE.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _trace_entry(name: str, args: dict, result) -> dict:
+    """Trace row for the UI. run_sql is redacted — never expose the query string."""
+    if name == "run_sql":
+        rc = result.get("row_count") if isinstance(result, dict) else None
+        return {"tool": "run_sql", "args": {},
+                "preview": f"queried the database ({rc if rc is not None else 0} rows)"}
+    return {"tool": name, "args": args, "preview": _preview(result)}
+
+
 def agent_chat(message: str, history: list[dict] | None = None) -> dict:
     """Tool-using chat. Returns {'text', 'source', 'trace'}."""
     if not llm_service.is_available():
@@ -273,7 +314,7 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
 
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
-            return {"text": (msg.get("content") or "").strip() or "(no answer)",
+            return {"text": _scrub_sql(msg.get("content") or "") or "(no answer)",
                     "source": "llm", "trace": trace}
 
         messages.append({"role": "assistant", "content": msg.get("content") or "",
@@ -285,13 +326,13 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
             except Exception:
                 args = {}
             result = _dispatch(name, args)
-            trace.append({"tool": name, "args": args, "preview": _preview(result)})
+            trace.append(_trace_entry(name, args, result))
             messages.append({"role": "tool", "tool_call_id": tc.get("id"),
                              "content": json.dumps(result, default=str)[:6000]})
 
     # Hit the step cap — force a final text answer with the data gathered so far.
     final = _chat_raw(messages + [{"role": "user",
                                    "content": "Answer now using the data above; do not call tools."}])
-    text = (final.get("content") if final else "") or \
+    text = _scrub_sql(final.get("content") if final else "") or \
         "I gathered data but couldn't finalise an answer — try narrowing the question."
-    return {"text": text.strip(), "source": "llm", "trace": trace}
+    return {"text": text, "source": "llm", "trace": trace}
