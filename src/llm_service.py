@@ -67,20 +67,21 @@ def _module_context(module_id: int) -> dict:
     risk = risk_engine.compute_module_risk(h)
     return {
         "module": h["name"], "project": h["project"], "unit": h["unit"],
-        "team_lead": h["team_lead"], "team_size": h["team_size"],
-        "window_weeks": h["window_weeks"], "commits": h["commits"],
+        "team_lead": h["team_lead"], "team_size_people": h["team_size"],
+        "window_weeks": h["window_weeks"], "commits_in_window": h["commits"],
         "risk_score": risk["score"], "risk_level": risk["level"],
         "risk_breakdown": risk["breakdown"],
-        "build_success_rate": h["build_success_rate"],
+        "build_success_rate_pct": h["build_success_rate"],
         "avg_clang_warnings_per_commit": h["avg_clang_warnings_per_commit"],
         "clang_warning_trend": h["warning_trend"],
-        "total_asan_failures": h["total_asan_failures"],
-        "integration_fail_pct": h["integration_fail_pct"],
+        "asan_failures_total_in_window": h["total_asan_failures"],
+        "integration_failure_rate_pct": h["integration_fail_pct"],
         "avg_review_latency_hours": h["avg_review_latency_hours"],
-        "major_comments": h["major_comments"], "minor_comments": h["minor_comments"],
-        "unreviewed_pct": h["unreviewed_pct"],
-        "punctuality_days_late": h["punctuality_days_late"],
-        "customer_issues": h["customer_issues"],
+        "major_review_comments_total_in_window": h["major_comments"],
+        "minor_review_comments_total_in_window": h["minor_comments"],
+        "pct_commits_merged_unreviewed": h["unreviewed_pct"],
+        "avg_days_late_vs_plan": h["punctuality_days_late"],
+        "customer_issues_total": h["customer_issues"],
     }
 
 
@@ -185,29 +186,29 @@ def _fallback_module(role: str, c: dict) -> str:
     dominant = max(bd, key=bd.get).replace("_", " ")
     return _OFFLINE + f"""## Executive Summary
 {c['module']} (project {c['project']}) is **{c['risk_level']}** with a risk score of
-{c['risk_score']}. Build success is {c['build_success_rate']}% and clang warnings are
+{c['risk_score']}. Build success is {c['build_success_rate_pct']}% and clang warnings are
 {c['avg_clang_warnings_per_commit']}/commit ({c['clang_warning_trend']}). The dominant
 risk dimension is **{dominant}**.
 
 ## Key Risks
 - **Quality** ({bd['quality_risk']}): {c['avg_clang_warnings_per_commit']} clang/commit,
-  {c['total_asan_failures']} ASAN failures, {c['integration_fail_pct']}% integration failures.
-- **Delivery** ({bd['delivery_risk']}): build success {c['build_success_rate']}%.
+  {c['asan_failures_total_in_window']} ASAN failures, {c['integration_failure_rate_pct']}% integration failures.
+- **Delivery** ({bd['delivery_risk']}): build success {c['build_success_rate_pct']}%.
 - **Collaboration** ({bd['collab_risk']}): review latency {c['avg_review_latency_hours']}h,
-  {c['unreviewed_pct']}% of commits merged unreviewed.
-- **Punctuality / customers**: avg {c['punctuality_days_late']} days late;
-  {c['customer_issues']} linked customer issues.
+  {c['pct_commits_merged_unreviewed']}% of commits merged unreviewed.
+- **Punctuality / customers**: avg {c['avg_days_late_vs_plan']} days late;
+  {c['customer_issues_total']} linked customer issues.
 
 ## Root Causes
-The {dominant} dimension dominates the score. With {c['major_comments']} major and
-{c['minor_comments']} minor review comments over the last {c['window_weeks']} weeks, the
+The {dominant} dimension dominates the score. With {c['major_review_comments_total_in_window']} major and
+{c['minor_review_comments_total_in_window']} minor review comments over the last {c['window_weeks']} weeks, the
 trend ({c['clang_warning_trend']}) suggests {'worsening' if '+' in c['clang_warning_trend'] else 'stabilising'} quality.
 
 ## Recommended Actions
 - Prioritise reducing {dominant}.
-- Triage the {c['total_asan_failures']} ASAN failures and {c['integration_fail_pct']}% integration failures.
-- Tighten review on the {c['unreviewed_pct']}% of unreviewed commits.
-- Review delivery estimates given the {c['punctuality_days_late']}-day average slip.
+- Triage the {c['asan_failures_total_in_window']} ASAN failures and {c['integration_failure_rate_pct']}% integration failures.
+- Tighten review on the {c['pct_commits_merged_unreviewed']}% of unreviewed commits.
+- Review delivery estimates given the {c['avg_days_late_vs_plan']}-day average slip.
 """
 
 
