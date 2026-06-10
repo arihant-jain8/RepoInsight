@@ -163,6 +163,26 @@ def _t_metric_catalog(module_type: str = "", **_):
     return analytics.get_metric_catalog(module_type or None)
 
 
+def _t_describe_schema(**_):
+    """Real tables, columns, views and FK relationships (read-only introspection)."""
+    conn = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    objs = conn.execute(
+        "SELECT name, type FROM sqlite_master WHERE type IN ('table','view') "
+        "AND name NOT LIKE 'sqlite_%' ORDER BY type, name").fetchall()
+    tables = [o["name"] for o in objs if o["type"] == "table"]
+    views = [o["name"] for o in objs if o["type"] == "view"]
+    columns, rels = {}, []
+    for t in tables:
+        columns[t] = [r["name"] for r in
+                      conn.execute(f"PRAGMA table_info({t})").fetchall()]
+        for fk in conn.execute(f"PRAGMA foreign_key_list({t})").fetchall():
+            rels.append(f"{t}.{fk['from']} -> {fk['table']}.{fk['to']}")
+    conn.close()
+    return {"tables": tables, "views": views, "columns": columns,
+            "relationships": rels}
+
+
 _DISPATCH = {
     "list_modules": _t_list_modules,
     "list_projects": _t_list_projects,
@@ -175,6 +195,7 @@ _DISPATCH = {
     "trace_customer_issues": _t_trace_customer_issues,
     "get_team_members": _t_team_members,
     "get_metric_catalog": _t_metric_catalog,
+    "describe_schema": _t_describe_schema,
     "run_sql": _t_run_sql,
 }
 
@@ -216,6 +237,9 @@ TOOLS = [
           "(label, unit, direction, good/bad thresholds). Pass module_type to scope.",
           {"module_type": {"type": "string",
                            "description": "network | backend | frontend | ai"}}),
+    _tool("describe_schema", "The real database structure: tables, columns, views and "
+          "foreign-key relationships. Use for any question about what tables/columns "
+          "exist or how the database is structured."),
     _tool("run_sql", "Run a single READ-ONLY SQL SELECT against the database for anything the "
           "other tools don't cover. Returns columns + rows.",
           {"query": {"type": "string", "description": "A single SELECT statement."}},
@@ -315,15 +339,18 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
 
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
-            # Never accept an answer produced without consulting the data — the
-            # model will otherwise invent modules/numbers. Force a tool call once.
+            # Guard against answering DATA questions from memory (the model would
+            # invent modules/numbers). Nudge once: if the answer cites specific data
+            # values it must verify them via a tool; pure schema answers may stand.
             if not trace and not nudged:
                 nudged = True
                 messages.append({"role": "assistant", "content": msg.get("content") or ""})
                 messages.append({"role": "user", "content":
-                                 "Do not answer from memory — you have no prior knowledge "
-                                 "of this organisation. Call a tool to fetch the real data "
-                                 "first, then answer."})
+                                 "You answered without using a tool. If your answer names "
+                                 "specific modules, projects, people, metrics, counts or "
+                                 "trends, those are DATA — call the right tool to verify "
+                                 "them, then answer. If your answer is only about the "
+                                 "database structure/schema, you may keep it as-is."})
                 continue
             return {"text": _scrub_sql(msg.get("content") or "") or "(no answer)",
                     "source": "llm", "trace": trace}
