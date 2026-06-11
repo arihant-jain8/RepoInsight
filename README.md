@@ -155,7 +155,7 @@ RepoInsight/
 
 ---
 
-## LLM configuration (for upcoming AI Reports + Copilot)
+## LLM configuration (AI Reports + Copilot)
 
 The LLM layer is **pluggable** via `config.py` and speaks the OpenAI-compatible
 `/v1/chat/completions` API, so the same code works against a small local model now and a
@@ -164,19 +164,42 @@ larger model later. Configure with environment variables:
 | Variable | Default (local) | On the AMD/ROCm machine (vLLM) |
 |---|---|---|
 | `LLM_BASE_URL` | `http://localhost:11434/v1` (Ollama) | `http://localhost:8000/v1` |
-| `LLM_MODEL` | `qwen2.5:3b` | `Qwen/Qwen2.5-7B-Instruct` |
+| `LLM_MODEL` | `qwen2.5:7b` | `Qwen/Qwen2.5-7B-Instruct` |
 | `LLM_API_KEY` | `not-needed-for-local` | — |
 
-To run a small local model now:
+### Run a local model with Ollama — Linux
 
-```powershell
-# install Ollama from https://ollama.com, then:
-ollama pull qwen2.5:3b
-ollama serve            # exposes the OpenAI-compatible API on :11434
+```bash
+# 1. Install Ollama (official script)
+curl -fsSL https://ollama.com/install.sh | sh
+
+# 2. Start the server (exposes the OpenAI-compatible API on :11434).
+#    The installer usually registers a systemd service that is already running —
+#    check with:  systemctl status ollama
+#    If it is not running, start it in its own terminal:
+ollama serve
+
+# 3. Pull the model (≈4.7 GB; matches the LLM_MODEL default)
+ollama pull qwen2.5:7b
+
+# 4. Verify the endpoint responds
+curl http://localhost:11434/v1/models
 ```
 
-> The AI Reports and Management Copilot pages are part of the next build step and will use
-> this configuration.
+> Lighter on RAM/VRAM? Use `ollama pull qwen2.5:3b` and set `LLM_MODEL=qwen2.5:3b`.
+> An NVIDIA/AMD GPU is used automatically when available; 7B needs ~6 GB of VRAM.
+
+### Run a local model with Ollama — Windows
+
+```powershell
+# install Ollama from https://ollama.com (or: winget install Ollama.Ollama), then:
+ollama pull qwen2.5:7b
+ollama serve            # often already running as a background service
+```
+
+If no model is running, every AI surface falls back to a deterministic data-driven
+summary (the sidebar shows `LLM: ⚪ offline`); start Ollama and it switches to
+`LLM: 🟢 connected`.
 
 ---
 
