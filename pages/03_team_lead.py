@@ -175,10 +175,9 @@ st.divider()
 # --- Commits behind this module's customer issues ------------------------
 st.subheader("Commits behind customer issues")
 issue_df = database.query_df(
-    "SELECT cu.name AS customer, ci.severity, ci.error_info, ci.commit_id, "
+    "SELECT ci.customer AS customer, ci.severity, ci.error_info, ci.commit_id, "
     "a.name AS author, ci.report_time, ci.resolve_time "
     "FROM customer_issues ci "
-    "JOIN customers cu ON cu.id=ci.customer_id "
     "LEFT JOIN commits c ON c.commit_id=ci.commit_id "
     "LEFT JOIN engineers a ON a.id=c.author_id "
     "WHERE ci.module_id=? ORDER BY ci.severity DESC",

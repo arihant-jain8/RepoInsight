@@ -44,10 +44,13 @@ def get_module_health(module_id: int, weeks: int = 4) -> dict:
     ph = _placeholders(wks)
 
     meta = database.query(
-        "SELECT m.id, m.name, m.type, m.team_size, e.name AS team_lead, "
-        "p.id AS project_id, p.name AS project, u.id AS unit_id, u.name AS unit "
+        "SELECT m.id, m.name, m.type, m.team_size, m.issue_status, "
+        "e.name AS team_lead, p.id AS project_id, p.name AS project, "
+        "p.customer AS customer, a.id AS account_id, a.name AS account, "
+        "vu.id AS unit_id, vu.name AS unit "
         "FROM modules m JOIN projects p ON p.id = m.project_id "
-        "JOIN units u ON u.id = p.unit_id "
+        "JOIN accounts a ON a.id = p.account_id "
+        "JOIN vertical_units vu ON vu.id = a.vertical_id "
         "LEFT JOIN engineers e ON e.id = m.team_lead_id WHERE m.id = ?",
         (module_id,),
     )[0]
@@ -116,7 +119,10 @@ def get_module_health(module_id: int, weeks: int = 4) -> dict:
         "module_id": meta["id"], "name": meta["name"], "type": meta["type"],
         "team_lead": meta["team_lead"], "team_size": meta["team_size"],
         "project_id": meta["project_id"], "project": meta["project"],
+        "customer": meta["customer"],
+        "account_id": meta["account_id"], "account": meta["account"],
         "unit_id": meta["unit_id"], "unit": meta["unit"],
+        "issue_status": meta["issue_status"],
         "window_weeks": len(wks), "commits": agg["commits"],
         "build_success_rate": agg["build_success_rate"] or 0.0,
         "integration_fail_pct": agg["integration_fail_pct"] or 0.0,
@@ -222,7 +228,7 @@ def get_type_benchmark(module_id: int, weeks: int = 4) -> dict:
 def get_org_summary(weeks: int = 4) -> dict:
     """High-level org health for KPI cards and the copilot context."""
     rankings = get_all_module_rankings(weeks)
-    levels = {"GREEN": 0, "AMBER": 0, "RED": 0}
+    levels = {"low": 0, "medium": 0, "high": 0}
     for r in rankings:
         levels[r["risk_level"]] += 1
 
@@ -241,8 +247,8 @@ def get_org_summary(weeks: int = 4) -> dict:
         "SELECT COUNT(*) AS n FROM customer_issues")[0]["n"]
 
     return {
-        "modules": len(rankings), "healthy": levels["GREEN"],
-        "warning": levels["AMBER"], "critical": levels["RED"],
+        "modules": len(rankings), "healthy": levels["low"],
+        "warning": levels["medium"], "critical": levels["high"],
         "avg_build_success": avg_build,
         "highest_risk": rankings[0] if rankings else None,
         "fastest_improving": improving[0] if improving else None,
@@ -267,11 +273,11 @@ def get_customer_impact(project_id: int | None = None) -> list[dict]:
     where = "WHERE ci.project_id = ?" if project_id is not None else ""
     params = (project_id,) if project_id is not None else ()
     return database.query(
-        "SELECT cu.name AS customer, COUNT(*) AS issues, "
+        "SELECT ci.customer AS customer, COUNT(*) AS issues, "
         "SUM(CASE WHEN ci.severity IN ('high','critical') THEN 1 ELSE 0 END) "
         "    AS high_critical "
-        "FROM customer_issues ci JOIN customers cu ON cu.id = ci.customer_id "
-        f"{where} GROUP BY cu.id ORDER BY issues DESC", params)
+        "FROM customer_issues ci "
+        f"{where} GROUP BY ci.customer ORDER BY issues DESC", params)
 
 
 def get_customer_trace(project_id: int | None = None) -> list[dict]:
@@ -288,17 +294,21 @@ def get_customer_trace(project_id: int | None = None) -> list[dict]:
 
 def list_projects() -> list[dict]:
     return database.query(
-        "SELECT p.id, p.name, p.manager, u.name AS unit "
-        "FROM projects p JOIN units u ON u.id = p.unit_id ORDER BY u.name, p.name"
+        "SELECT p.id, p.name, p.manager, p.customer, a.name AS account, "
+        "vu.name AS unit "
+        "FROM projects p JOIN accounts a ON a.id = p.account_id "
+        "JOIN vertical_units vu ON vu.id = a.vertical_id "
+        "ORDER BY vu.name, p.name"
     )
 
 
 def list_modules() -> list[dict]:
     return database.query(
         "SELECT m.id, m.name, m.type, e.name AS team_lead, "
-        "p.name AS project, u.name AS unit "
+        "p.name AS project, a.name AS account, vu.name AS unit "
         "FROM modules m JOIN projects p ON p.id = m.project_id "
-        "JOIN units u ON u.id = p.unit_id "
+        "JOIN accounts a ON a.id = p.account_id "
+        "JOIN vertical_units vu ON vu.id = a.vertical_id "
         "LEFT JOIN engineers e ON e.id = m.team_lead_id "
-        "ORDER BY u.name, p.name, m.name"
+        "ORDER BY vu.name, p.name, m.name"
     )

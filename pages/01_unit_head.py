@@ -38,7 +38,7 @@ total_people = sum(r["team_size"] for r in view)
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Teams / Modules", len(view))
 c2.metric("People", total_people)
-c3.metric("🔴 Critical", sum(1 for r in view if r["risk_level"] == "RED"))
+c3.metric("🔴 Critical", sum(1 for r in view if r["risk_level"] == "high"))
 c4.metric("Avg Build Success",
           f"{(sum(r['build_success_rate'] for r in view) / len(view)):.1f}%")
 
