@@ -61,6 +61,7 @@ CREATE TABLE ai_tool_efficiency (
 CREATE TABLE projects (
     id         INTEGER PRIMARY KEY,
     account_id INTEGER REFERENCES accounts(id),   -- was unit_id -> units(id)
+    proj_key   TEXT,        -- AURA.md ingestion id, e.g. 'proj_ran_5g'
     name       TEXT,
     customer   TEXT,        -- end client, e.g. 'AT&T' / 'Verizon'
     manager    TEXT         -- Project Manager (persona)
@@ -69,6 +70,7 @@ CREATE TABLE projects (
 CREATE TABLE modules (
     id           INTEGER PRIMARY KEY,
     project_id   INTEGER REFERENCES projects(id),
+    mod_key      TEXT,       -- AURA.md ingestion id, e.g. 'mod_ran_packet_parser'
     name         TEXT,       -- e.g. 'auth-service'
     type         TEXT,       -- network | backend | frontend | ai
     repo_url     TEXT,       -- multi-repo: each module = its own git repo

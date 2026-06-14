@@ -1,28 +1,49 @@
 # Project Aura — Upgrade Plan
 
 **Current code → `AURA.md` blueprint.** Evolve the existing codebase (Streamlit +
-SQLite + local Ollama, type-aware risk engine) toward the *logic* in `AURA.md`:
-federated ingestion, hashed identities, multi-tenant verticals, Jira + telemetry
-data, AI-tooling metrics, RBAC sandboxing, and a multi-agent AI core.
+SQLite + local Ollama, type-aware risk engine) toward `AURA.md`: multi-tenant
+verticals, Jira + telemetry data, AI-tooling metrics, persona dashboards, and AI
+insights — all served from a **static, pre-seeded database**.
 
 | | |
 |---|---|
-| **Scope** | Backend/application **logic only**. Frontend stays **Streamlit** for now. |
+| **Scope** | App **logic + persona dashboards** over a **static seeded DB**. Frontend stays **Streamlit**. |
+| **Live ingestion** | NOT a real pipeline — a **showcase** of the architecture only. See [API_GATEWAY_DECISION](#-api_gateway_decision-revisit-later). |
+| **Dropped** | Identity hashing/anonymisation — higher-ups (Unit Head/PM) see aggregates, not developer ids; **real names stay in the DB** (Team Lead needs them). |
 | **Deferred** | Next.js rewrite → [Appendix](#appendix--nextjs-frontend-deferred). MongoDB → [Phase 7](#phase-7--storage-migration-sqlite--mongodb). |
-| **Frozen** | Risk-engine math (`src/risk_engine.py`) — only its module→type *input* changes. |
+| **Frozen** | Risk-engine math (`src/risk_engine.py`) — only its module→type *input* changed. |
 | **Frozen** | OpenAI-compatible LLM seam — model swap is config-only, done later on the ROCm box. |
+
+> ### 🔖 API_GATEWAY_DECISION (revisit later)
+>
+> **Decided 2026-06-15 (revised — real but scoped).** Federated ingestion =
+> edge agents → API gateway → central staging DB, built for real but limited to one agent:
+> - **4 agents conceptually** (one per project). For this demo we build **exactly one real
+>   agent**, for **5G Core Rollout**. The other 3 are pre-loaded and shown as diagram boxes.
+> - **Real fill-in (2A):** the seeder **holds back the whole 5G Core Rollout project** (its 3
+>   modules + all activity) from the central DB. Running the one agent **actually writes** that
+>   project in through the gateway, so it appears live — including the RED **RAN Packet Parser**.
+> - The gateway **does write** to the central DB (real ingestion) via a shared `repository.py`
+>   insert seam. The other 3 projects ship pre-loaded. So the demo DB ships with **3 of 4
+>   projects**; running the agent completes it.
+> - Hashing/anonymisation **out of scope**.
+>
+> **To revisit:** search `API_GATEWAY_DECISION` — e.g. build the other 3 agents, give each a
+> separate per-source DB, the [Phase 7](#phase-7--storage-migration-sqlite--mongodb) Mongo
+> backend, or privacy hashing.
 
 ---
 
 ## Table of contents
 
+- [🔖 API_GATEWAY_DECISION](#-api_gateway_decision-revisit-later)
 - [Phase 0 — Gap snapshot](#phase-0--gap-snapshot)
 - [Reference — Data structures](#reference--data-structures-verbatim-from-auramd)
-- [Phase 1 — Data model](#phase-1--data-model)
-- [Phase 2 — Federated ingestion](#phase-2--federated-ingestion)
-- [Phase 3 — Live data generator](#phase-3--live-data-generator)
+- [Phase 1 — Data model](#phase-1--data-model) ✅ done
+- [Phase 2 — Ingestion architecture showcase](#phase-2--ingestion-architecture-showcase) 🔖
+- [Phase 3 — ~~Live data generator~~ (dropped)](#phase-3--live-data-generator-dropped)
 - [Phase 4 — Analytics rollups](#phase-4--analytics-rollups)
-- [Phase 5 — RBAC & guardrails](#phase-5--rbac--guardrails)
+- [Phase 5 — Persona dashboards + view scoping](#phase-5--persona-dashboards--view-scoping)
 - [Phase 6 — AI core](#phase-6--ai-core)
 - [Phase 7 — Storage migration](#phase-7--storage-migration-sqlite--mongodb)
 - [Execution order](#execution-order)
@@ -335,46 +356,32 @@ def generate_mock_git_log():
 
 ---
 
-## Phase 2 — Federated ingestion
+## Phase 2 — Ingestion architecture showcase
 
-> **Goal:** data enters through an HTTP gateway, not a direct DB write — the "non-invasive, privacy-preserving" core of `AURA.md` §1. Pure backend, no UI.
-> **Touches:** `requirements.txt`, `src/gateway/main.py` *(new)*, `src/edge_agent.py` *(new)*, `src/config.py`
+> **Decision:** [API_GATEWAY_DECISION](#-api_gateway_decision-revisit-later) — real write-through, one agent (5G Core Rollout), real fill-in (2A).
+> **Goal:** one real edge agent ingests the held-back **5G Core Rollout** project through the API gateway into the central DB, live. Other 3 projects pre-loaded.
+> **Touches:** `src/repository.py` *(new)*, `src/gateway/main.py` *(new)*, `src/edge_agent.py` *(new)*, `src/generate_data.py`, `src/config.py`, a new Architecture page in `pages/`.
 
 ### Steps
 
-- [ ] **2.1 — Add deps** to `requirements.txt`: `fastapi`, `uvicorn[standard]`, `pydantic`; uncomment `requests`. *(`pymongo`/`motor` come in Phase 7.)*
-- [ ] **2.2 — Define the write seam first** — a minimal `insert_*` interface (git / jira / performance / unit) backed by today's `database.py`, so the gateway never calls SQLite directly *(becomes `repository.py` in Phase 7)*.
-- [ ] **2.3 — Build the gateway** `src/gateway/main.py`:
-  - [ ] **2.3.1** Pydantic request models for each of the four `AURA.md` §2 JSON shapes (git_log, jira_log, performance_data, vertical_unit).
-  - [ ] **2.3.2** `POST /ingest/git`, `/ingest/jira`, `/ingest/performance`, `/ingest/unit` — validate → call the write seam (2.2).
-  - [ ] **2.3.3** Health check `GET /healthz` + structured error responses (422 on bad payload).
-  - [ ] **2.3.4** Smoke test: `uvicorn` up, `curl` one payload of each type, confirm rows land.
-- [ ] **2.4 — Build the edge agent** `src/edge_agent.py` — pure functions, unit-testable:
-  - [ ] **2.4.1 `filter_fields(record)`** — dynamic schema filtering: keep only present fields (`$exists` semantics); never break on a missing key.
-  - [ ] **2.4.2 `sanitize(text)`** — regex strip of secrets / PII from free text (commit messages, ticket summaries).
-  - [ ] **2.4.3 `hash_author(email)`** — salted SHA-256 → `author_hash` using `AURA_HASH_SALT`; raw email never leaves the agent.
-  - [ ] **2.4.4** Optional *local-only* salt→name map for personas that must re-display names (never sent to the gateway).
-  - [ ] **2.4.5 `forward(record)`** — assemble cleaned doc → `POST` to `GATEWAY_URL`.
-- [ ] **2.5 — Wire config** in `src/config.py`: `GATEWAY_URL` (default `http://localhost:8000`) and `AURA_HASH_SALT`.
+- [x] **2.1 — Deps** — `fastapi`, `uvicorn[standard]`, `pydantic` added (edge agent posts via existing `httpx`; no `requests`).
+- [x] **2.2 — AURA id columns** — `projects.proj_key` + `modules.mod_key` added & seeded ([§1.5a](#-15a--module--type-mapping) names ↔ AURA slugs).
+- [ ] **2.3 — Write seam** `src/repository.py` — `ingest_project_bundle(bundle)`: insert a project + its modules, engineers, commits (+ commit_metrics, review_comments), jira_logs, performance_data into the central DB, resolving the account by name. Reused by gateway *and* seeder (single insert path).
+- [ ] **2.4 — Seeder split** `src/generate_data.py` — after the full seed, **export 5G Core Rollout** (project + 3 modules + all activity) to `data/sources/proj_ran_5g.json`, then **delete those rows** from the central DB. Central ships with 3 projects. (Add a `--full` flag to skip the split for dev.)
+- [ ] **2.5 — Gateway** `src/gateway/main.py` — `POST /ingest/project` (accepts the bundle → `repository.ingest_project_bundle`), `GET /healthz`, `GET /stats` (row counts for the page). Pydantic-validated.
+- [ ] **2.6 — Edge agent** `src/edge_agent.py` — reads `data/sources/proj_ran_5g.json`, `filter_fields()` ($exists semantics), `forward()` → POST to the gateway via `httpx`.
+- [ ] **2.7 — Architecture page** `pages/0X_architecture.py` — diagram (4 edge agents → API gateway → central staging DB); 3 boxes "loaded ✓", the 5G Core one with a **"Run agent"** button that triggers the ingest; live row counts from `/stats`; the project appears after running.
+- [ ] **2.8 — Config** `src/config.py`: `GATEWAY_URL` (default `http://localhost:8000`).
+- [ ] **2.9 — Verify** — fresh seed → app shows 3 projects → run agent → 5G Core Rollout + RED RAN Packet Parser appear; risk labels still 12/12.
 
 ---
 
-## Phase 3 — Live data generator
+## Phase 3 — Live data generator (dropped)
 
-> **Goal:** replace the batch seeder's role with the streaming simulator from `AURA.md` §5, so the full edge → gateway → DB path runs live.
-> **Touches:** `mock_generators.py` *(new)*, `src/generate_data.py`
-
-### Steps
-
-- [ ] **3.1 — Scaffold `mock_generators.py`** (repo root) — define `DEMO_MATRIX` (4 projects × 3 modules from `AURA.md`) and a main tick loop with a configurable interval.
-- [ ] **3.2 — Payload builders** (one per collection, posting through the edge agent → gateway):
-  - [ ] **3.2.1** `generate_git_log()` — commit with `ai_agent_used` + random `ai_generated_percentage` (0–100), churn, lines ±.
-  - [ ] **3.2.2** `generate_jira_log()` — occasional customer incident with severity + lifecycle status.
-  - [ ] **3.2.3** `generate_performance_sample()` — telemetry (packet drop, latency, CPU).
-- [ ] **3.3 — Script the anomaly** — bias high-severity incidents + high `packet_drop_rate` / `cpu_utilization` at `mod_ran_packet_parser` (Telecomm → 5G Core → Module 1) so the detect → correlate → resolve loop is visible.
-- [ ] **3.4 — Correlate commits to issues** — for every generated incident, emit a matching `git_log` on the same `module_id` (feeds the existing `customer_trace` lineage view — keep it).
-- [ ] **3.5 — Route through the pipeline** — POST to the gateway (not direct DB), so the full edge → gateway → DB path is exercised live.
-- [ ] **3.6 — Keep the backfill** — `src/generate_data.py` stays the **one-shot history backfill** (weekly trends); `mock_generators.py` is the **live** stream on top.
+> **Dropped** per [API_GATEWAY_DECISION](#-api_gateway_decision-revisit-later): the demo DB is
+> **static** (no live rows), so there is no streaming generator. The one-shot seeder
+> (`src/generate_data.py`, Phase 1) is the only data source. If real ingestion is
+> revisited, the original streaming design is in git history.
 
 ---
 
@@ -395,23 +402,21 @@ def generate_mock_git_log():
 
 ---
 
-## Phase 5 — RBAC & guardrails
+## Phase 5 — Persona dashboards + view scoping
 
-> **Goal:** enforce `AURA.md` §3–4 access rules **in logic**, not just prompts — on the existing Streamlit pages + agent.
-> **Touches:** `src/rbac.py` *(new)*, `src/agent.py`, `pages/01–03_*.py`
+> **Goal:** the three `AURA.md` §3 persona views, each showing role-appropriate data
+> from the **static DB**. *Light* scoping (filter to the persona's slice) — **not** heavy
+> RBAC/auth (dropped along with hashing; this is a demo). Team Lead sees **real names**;
+> Unit Head / PM see **aggregates** (no developer ids).
+> **Touches:** `pages/01–03_*.py`, `src/analytics.py`, optionally `src/agent.py`.
 
 ### Steps
 
-- [ ] **5.1 — Define the principal** in `src/rbac.py` — `Principal` dataclass = role (`unit_head` / `pm` / `team_lead`) + tenant scope (vertical / account / project / module).
-- [ ] **5.2 — Scope filter** `scope_filter(principal, …)` — translate a principal into tenant predicates (allowed vertical/account/project/module ids).
-- [ ] **5.3 — Persona guardrails:**
-  - [ ] **5.3.1 Team Lead** — out-of-module queries hard-fail: `Access Denied: Target telemetry outside local engineering boundary.`
-  - [ ] **5.3.2 PM sandbox** — session-bound tenant token limiting reachable `project_id`s.
-  - [ ] **5.3.3 Unit Head** — read across own vertical's accounts, but not other verticals.
-- [ ] **5.4 — Enforce in analytics** — apply `scope_filter` inside the analytics functions (or a wrapper) so scoping can't be bypassed by calling them directly.
-- [ ] **5.5 — Enforce in the agent** (`src/agent.py`) — thread the active `Principal` into `_dispatch`; `_t_run_sql` ANDs-in the tenant scope and rejects out-of-scope tables. *(Existing read-only SELECT guard stays.)*
-- [ ] **5.6 — Scope the persona pages** (`pages/01–03`) — build the `Principal` for the selected role, pass it down so each view sees only its slice. UI stays Streamlit — just scoped data.
-- [ ] **5.7 — Test the boundaries** — assert each persona is denied a known out-of-scope query.
+- [ ] **5.1 — Unit Head** (`pages/01_unit_head.py`) — strategic/customer view: vertical → account → project drill-down, customer-status buckets, AI-tool-efficiency panel, customer-reported errors. Aggregates only.
+- [ ] **5.2 — Project Manager** (`pages/02_project_manager.py`) — delivery view: jira ticket pipeline (severity / status / lifecycle), commit-level tracking with AI-authored %, customer review table.
+- [ ] **5.3 — Team Lead** (`pages/03_team_lead.py`) — local workspace: task lifecycle, **real engineer names**, per-commit comments, the module's customer-issue → commit table. Scoped to the lead's own module(s).
+- [ ] **5.4 — Light scoping** — a small helper that filters each page's data to its slice (vertical / project / module). No auth tokens, no hard-fail — just the right data per view.
+- [ ] **5.5 — (optional) Agent boundary** — keep the `AURA.md` narrative: the Team Lead copilot only answers about its own module. Soft guard in `src/agent.py`. Skip if time-boxed.
 
 ---
 
@@ -457,15 +462,15 @@ def generate_mock_git_log():
 ## Execution order
 
 ```
-Phase 1 (data model) ─► Phase 2 (gateway + edge) ─► Phase 3 (live stream)
-   ─► Phase 4 (analytics) ─► Phase 5 (RBAC) ─► Phase 6 (AI core)   ◄── core logic done
-   ─► Phase 7 (MongoDB, optional / last)
+Phase 1 (data model) ✅ ─► Phase 4 (analytics rollups) ─► Phase 5 (persona dashboards)
+   ─► Phase 6 (AI core)   ◄── demo-ready
+   ─► Phase 2 (ingestion showcase, anytime)   ·   Phase 7 (MongoDB, optional / last)
 ```
 
-**Demo-ready at Phase 6:** full federated-ingestion + hashed + multi-tenant + RBAC
-+ multi-agent story on **Streamlit + SQLite** — all the real logic, no frontend
-rewrite. Phase 7 (Mongo) and the [Appendix](#appendix--nextjs-frontend-deferred)
-(Next.js) are infrastructure swaps for later.
+**Static-DB demo path:** the data is already seeded (Phase 1), so the value flow is
+**analytics → persona dashboards → AI insights**. Phase 2 is a self-contained *showcase*
+(API_GATEWAY_DECISION) that can slot in whenever. Phase 3 is dropped. Phase 7 (Mongo)
+and the [Appendix](#appendix--nextjs-frontend-deferred) (Next.js) are deferred.
 
 ---
 

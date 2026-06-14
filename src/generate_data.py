@@ -128,6 +128,29 @@ MODULE_CONFIGS = {
                                   "late_days": 1, "latency": 11, "major_rate": 0.23, "issue_rate": 0.03},
 }
 
+# AURA.md ingestion string ids (from §5 DEMO_MATRIX), keyed by our names. Stored
+# as projects.proj_key / modules.mod_key so the gateway can resolve incoming docs.
+AURA_PROJECT_KEYS = {
+    "5G Core Rollout": "proj_ran_5g",
+    "Edge Computing Layer": "proj_edge_comp",
+    "Instant Payments Core": "proj_pay_core",
+    "Wealth Management APIs": "proj_wealth_api",
+}
+AURA_MODULE_KEYS = {
+    "RAN Packet Parser": "mod_ran_packet_parser",
+    "Baseband Processing": "mod_baseband_proc",
+    "OSS/BSS Billing Interface": "mod_oss_bss_billing",
+    "MEC Signal Handler": "mod_mec_signal",
+    "Baseband Telemetry Stream": "mod_baseband_stream",
+    "RAN Automation Engine": "mod_ran_automation",
+    "ISO20022 Message Parser": "mod_iso_parser",
+    "Ledger Clearing Engine": "mod_ledger_engine",
+    "Fraud Analytics Stream": "mod_fraud_stream",
+    "Portfolio Valuation Engine": "mod_portfolio_val",
+    "KYC Document Sanitizer": "mod_kyc_sanitize",
+    "Trade Execution Broker": "mod_trade_broker",
+}
+
 # Type-aware quality metrics: (metric, label, unit, higher_is_better, weight, good, bad).
 # good -> ~0 risk, bad -> ~100 risk. Weights per type sum to ~1.0.
 METRIC_CATALOG = {
@@ -222,10 +245,10 @@ def seed_module(cur, project_id, mod_name, pools):
     repo = mod_name.lower().replace(" ", "-").replace("/", "-")
     # Insert module first (team_lead_id filled after engineers exist).
     cur.execute(
-        "INSERT INTO modules (project_id, name, type, repo_url, team_lead_id, "
-        "team_size, issue_status) VALUES (?, ?, ?, ?, NULL, ?, ?)",
-        (project_id, mod_name, cfg["type"], f"https://git.example/{repo}.git",
-         cfg["team_size"], cfg["issue_status"]))
+        "INSERT INTO modules (project_id, mod_key, name, type, repo_url, "
+        "team_lead_id, team_size, issue_status) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
+        (project_id, AURA_MODULE_KEYS[mod_name], mod_name, cfg["type"],
+         f"https://git.example/{repo}.git", cfg["team_size"], cfg["issue_status"]))
     module_id = cur.lastrowid
 
     # Team: team_size engineers belonging to this module (first is the lead).
@@ -235,7 +258,6 @@ def seed_module(cur, project_id, mod_name, pools):
                     (fake.name(), module_id))
         team.append(cur.lastrowid)
     pools["engineers"] += len(team)
-    pools["all_engineer_ids"].extend(team)
     cur.execute("UPDATE modules SET team_lead_id = ? WHERE id = ?",
                 (team[0], module_id))
 
@@ -260,13 +282,10 @@ def seed_module(cur, project_id, mod_name, pools):
 
             build_success = 1 if random.random() < build_prob else 0
             author_id = random.choice(team)
-            # Reviewer: usually a teammate, occasionally cross-team.
-            pool = pools["all_engineer_ids"]
-            if random.random() < 0.15 and len(pool) > 1:
-                reviewer_id = random.choice([e for e in pool if e != author_id])
-            else:
-                reviewer_id = random.choice(
-                    [e for e in team if e != author_id] or [author_id])
+            # Reviewer: a teammate. Reviews stay within the module so each project
+            # is a self-contained tenant (required for per-project ingestion).
+            reviewer_id = random.choice(
+                [e for e in team if e != author_id] or [author_id])
             integ_total = random.randint(40, 80)
             integ_failed = (random.randint(0, 5) if build_prob > 0.85
                             else random.randint(3, 12))
@@ -338,7 +357,7 @@ def main():
                 "higher_is_better, weight, good, bad) VALUES (?,?,?,?,?,?,?,?)",
                 (metric, mtype, label, unit, hib, weight, good, bad))
 
-    pools = {"all_engineer_ids": [], "module_commit_ids": {},
+    pools = {"module_commit_ids": {},
              "engineers": 0, "commits": 0, "metrics": 0, "comments": 0}
 
     # --- Hierarchy: vertical -> account -> project -> module -------------
@@ -364,9 +383,10 @@ def main():
 
             for proj in account["projects"]:
                 cur.execute(
-                    "INSERT INTO projects (account_id, name, customer, manager) "
-                    "VALUES (?, ?, ?, ?)",
-                    (account_id, proj["name"], proj["customer"], proj["manager"]))
+                    "INSERT INTO projects (account_id, proj_key, name, customer, "
+                    "manager) VALUES (?, ?, ?, ?, ?)",
+                    (account_id, AURA_PROJECT_KEYS[proj["name"]], proj["name"],
+                     proj["customer"], proj["manager"]))
                 project_id = cur.lastrowid
 
                 for mod_name in proj["modules"]:
