@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(
 
 import streamlit as st
 
-from aura.ai import agent
+from aura.ai import agent, charts
 from aura import ui
 
 st.set_page_config(page_title="Copilot", page_icon="💬", layout="wide")
@@ -27,9 +27,9 @@ st.caption("A tool-using agent: it queries the live database to answer, and show
 
 EXAMPLES = [
     "Which module should I focus on this week and why?",
+    "Bar chart of risk score per module",
     "How many high/critical customer issues does each high-risk module have?",
     "Which commit caused AT&T's worst issue?",
-    "Does reviewer overload line up with customer bugs in RAN Packet Parser?",
 ]
 st.caption("Try: " + " · ".join(f"“{e}”" for e in EXAMPLES))
 
@@ -43,6 +43,19 @@ def _render_trace(trace):
             st.markdown(f"{i}. `{t['tool']}({args})` → {t['preview']}")
 
 
+def _render_chart(spec):
+    """Render a model-produced chart spec (data-over-code: spec, never executed code)."""
+    if not spec:
+        return
+    try:
+        st.plotly_chart(charts.build_figure(spec), width="stretch")
+        st.caption(f"📊 {spec['chart_type']} of `{spec['dataset']}` "
+                   f"({spec.get('x')} × {spec.get('y')}) — rendered from a validated "
+                   "chart spec, not generated code.")
+    except Exception as e:
+        st.caption(f"(couldn't render chart: {e})")
+
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -52,6 +65,7 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
         if msg["role"] == "assistant":
             _render_trace(msg.get("trace"))
+            _render_chart(msg.get("chart"))
             if msg.get("source") == "fallback":
                 st.caption("⚠️ Model offline — data-driven reply (no tools).")
 
@@ -64,11 +78,13 @@ if prompt := st.chat_input("Ask about your engineering org…"):
             result = agent.agent_chat(prompt, st.session_state.messages[:-1])
         st.markdown(result["text"])
         _render_trace(result.get("trace"))
+        _render_chart(result.get("chart"))
         if result["source"] == "fallback":
             st.caption("⚠️ Model offline — data-driven reply (no tools).")
     st.session_state.messages.append({
         "role": "assistant", "content": result["text"],
         "source": result["source"], "trace": result.get("trace", []),
+        "chart": result.get("chart"),
     })
 
 if st.session_state.messages and st.button("Clear conversation"):

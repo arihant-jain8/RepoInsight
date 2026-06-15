@@ -17,6 +17,7 @@ import httpx
 
 from aura.analytics import analytics
 from aura import config
+from aura.ai import charts
 from aura.ai import llm_service
 
 MAX_STEPS = 6
@@ -211,6 +212,19 @@ def _t_telemetry(module_name: str = "", **_):
     return analytics.get_telemetry(m["id"])
 
 
+def _t_make_chart(chart_type: str = "", dataset: str = "", x: str = "",
+                  y: str = "", color: str = "", title: str = "", **_):
+    """Validate a chart spec (data-over-code). On success returns the spec for the UI
+    to render; on a bad field/dataset returns an error so the model self-corrects."""
+    spec = {"chart_type": chart_type, "dataset": dataset, "x": x, "y": y, "title": title}
+    if color:
+        spec["color"] = color
+    ok, err = charts.validate_spec(spec)
+    if not ok:
+        return {"error": err}
+    return {"status": "chart spec accepted — it will be rendered to the user", "spec": spec}
+
+
 _DISPATCH = {
     "list_modules": _t_list_modules,
     "list_projects": _t_list_projects,
@@ -227,6 +241,7 @@ _DISPATCH = {
     "get_ai_efficiency": _t_ai_efficiency,
     "get_jira_pipeline": _t_jira_pipeline,
     "get_telemetry": _t_telemetry,
+    "make_chart": _t_make_chart,
     "describe_schema": _t_describe_schema,
     "run_sql": _t_run_sql,
 }
@@ -279,6 +294,18 @@ TOOLS = [
           _PROJECT_ARG),
     _tool("get_telemetry", "Real-time telemetry samples for a module (packet drop rate, "
           "latency, CPU utilisation, associated incidents).", _MODULE_ARG, ["module_name"]),
+    _tool("make_chart",
+          "Render a chart for the user when they ask for a graph/chart/plot/visualisation. "
+          "Pick chart_type (bar/line/pie), a dataset, and x + y fields (optionally color). "
+          "You do NOT provide data values — the app fills them from the dataset. Datasets:\n"
+          + charts.catalog_text(),
+          {"chart_type": {"type": "string", "description": "bar | line | pie"},
+           "dataset": {"type": "string", "description": "one of the dataset names listed above"},
+           "x": {"type": "string", "description": "category field for the x-axis (or pie names)"},
+           "y": {"type": "string", "description": "value field for the y-axis (or pie values)"},
+           "color": {"type": "string", "description": "optional field to group/colour by"},
+           "title": {"type": "string", "description": "a short chart title"}},
+          ["chart_type", "dataset", "x", "y"]),
     _tool("describe_schema", "The real database structure: tables, columns, views and "
           "foreign-key relationships. Use for any question about what tables/columns "
           "exist or how the database is structured."),
@@ -363,7 +390,7 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
     """Tool-using chat. Returns {'text', 'source', 'trace', 'tokens', 'calls'}."""
     if not llm_service.is_available():
         res = llm_service.chat(message, history)
-        res.update({"trace": [], "tokens": 0, "calls": 0})
+        res.update({"trace": [], "tokens": 0, "calls": 0, "chart": None})
         return res
 
     messages = [{"role": "system", "content": _prompt()}]
@@ -375,13 +402,15 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
     trace = []
     nudged = False
     total_tokens = calls = 0
+    chart = None
     for _ in range(MAX_STEPS):
         msg, usage = _chat_raw(messages, tools=TOOLS)
         calls += 1
         total_tokens += usage.get("total_tokens", 0)
         if msg is None:  # transport error mid-loop -> fallback
             res = llm_service.chat(message, history)
-            res.update({"trace": trace, "tokens": total_tokens, "calls": calls})
+            res.update({"trace": trace, "tokens": total_tokens, "calls": calls,
+                        "chart": chart})
             return res
 
         tool_calls = msg.get("tool_calls")
@@ -401,7 +430,7 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
                 continue
             return {"text": _scrub_sql(msg.get("content") or "") or "(no answer)",
                     "source": "llm", "trace": trace,
-                    "tokens": total_tokens, "calls": calls}
+                    "tokens": total_tokens, "calls": calls, "chart": chart}
 
         messages.append({"role": "assistant", "content": msg.get("content") or "",
                          "tool_calls": tool_calls})
@@ -412,6 +441,8 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
             except Exception:
                 args = {}
             result = _dispatch(name, args)
+            if name == "make_chart" and isinstance(result, dict) and result.get("spec"):
+                chart = result["spec"]
             trace.append(_trace_entry(name, args, result))
             messages.append({"role": "tool", "tool_call_id": tc.get("id"),
                              "content": json.dumps(result, default=str)[:6000]})
@@ -424,4 +455,4 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
     text = _scrub_sql(final.get("content") if final else "") or \
         "I gathered data but couldn't finalise an answer — try narrowing the question."
     return {"text": text, "source": "llm", "trace": trace,
-            "tokens": total_tokens, "calls": calls}
+            "tokens": total_tokens, "calls": calls, "chart": chart}
