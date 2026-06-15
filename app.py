@@ -8,15 +8,15 @@ import os
 import sys
 
 # Make the modules in src/ importable when launched via `streamlit run app.py`.
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import plotly.express as px
 import streamlit as st
 
-import analytics
-import config
-import database
-import ui
+from aura.analytics import analytics
+from aura import config
+from aura.data import database
+from aura import ui
 
 st.set_page_config(
     page_title="Engineering Intelligence Copilot",

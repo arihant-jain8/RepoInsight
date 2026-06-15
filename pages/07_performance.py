@@ -10,17 +10,17 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+    os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import pandas as pd
 import streamlit as st
 
-import agent
-import analytics
-import config
-import llm_service
-import perf
-import ui
+from aura.ai import agent
+from aura.analytics import analytics
+from aura import config
+from aura.ai import llm_service
+from aura.ai import perf
+from aura import ui
 
 st.set_page_config(page_title="Performance", page_icon="⚡", layout="wide")
 ui.require_db()

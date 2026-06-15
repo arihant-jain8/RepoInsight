@@ -5,8 +5,8 @@ Quality signals are per module TYPE (from commit_metrics + metric_catalog); shar
 process signals (build, integration, review, delivery) come from commits.
 """
 
-import database
-import risk_engine
+from aura.data import database
+from aura.analytics import risk_engine
 
 
 # -------------------------------------------------------------------------

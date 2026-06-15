@@ -13,9 +13,9 @@ import os
 
 import httpx
 
-import analytics
-import config
-import risk_engine
+from aura.analytics import analytics
+from aura import config
+from aura.analytics import risk_engine
 
 _CHAT_URL = f"{config.LLM_BASE_URL}/chat/completions"
 _MODELS_URL = f"{config.LLM_BASE_URL}/models"
@@ -55,7 +55,7 @@ def _call(messages: list[dict], max_tokens: int | None = None) -> str | None:
 
 
 def _prompt(name: str) -> str:
-    with open(os.path.join(config.SRC_DIR, "prompts", name), encoding="utf-8") as f:
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", name), encoding="utf-8") as f:
         return f.read()
 
 

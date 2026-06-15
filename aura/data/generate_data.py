@@ -7,7 +7,7 @@ metrics (from METRIC_CATALOG) into commit_metrics. Engineers belong to a module'
 team; one is the team lead. A subset of customer issues point at real commit ids in
 the worst modules so the customer->commit traceability demo lights up.
 
-Run once:  python src/generate_data.py
+Run once:  python -m aura.data.generate_data
 """
 
 import json
@@ -18,8 +18,8 @@ from datetime import datetime, timedelta
 
 from faker import Faker
 
-import config
-import database
+from aura import config
+from aura.data import database
 
 fake = Faker()
 random.seed(42)

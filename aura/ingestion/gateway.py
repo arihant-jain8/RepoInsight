@@ -9,7 +9,7 @@ Endpoints:
   GET  /stats            -> central-DB row counts (for the Architecture page)
   POST /ingest/project   -> ingest a held-back project bundle into central staging
 
-Run from the project root:  python src/gateway/main.py   (or set GATEWAY_PORT)
+Run from the project root:  python -m aura.ingestion.gateway   (or set GATEWAY_PORT)
 """
 
 import json
@@ -18,10 +18,10 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Make sibling modules (database, repository, config) importable.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-import database      # noqa: E402
-import repository    # noqa: E402
+from aura.data import database      # noqa: E402
+from aura.data import repository    # noqa: E402
 
 REQUIRED_KEYS = {"account_name", "project", "modules", "engineers", "commits",
                  "commit_metrics", "review_comments", "jira_logs", "performance_data"}

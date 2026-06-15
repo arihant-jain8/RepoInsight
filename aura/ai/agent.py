@@ -15,9 +15,9 @@ import sqlite3
 
 import httpx
 
-import analytics
-import config
-import llm_service
+from aura.analytics import analytics
+from aura import config
+from aura.ai import llm_service
 
 MAX_STEPS = 6
 _MAX_ROWS = 30  # cap rows fed back to the model per tool result
@@ -334,7 +334,7 @@ def _preview(result) -> str:
 
 
 def _prompt() -> str:
-    with open(os.path.join(config.SRC_DIR, "prompts", "agent.txt"), encoding="utf-8") as f:
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", "agent.txt"), encoding="utf-8") as f:
         return f.read()
 
 

@@ -10,10 +10,10 @@ import os
 
 # --- Database -------------------------------------------------------------
 # One central SQLite file that every (simulated) per-module agent writes into.
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SRC_DIR)
+_PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))          # the aura/ package
+PROJECT_ROOT = os.path.dirname(_PACKAGE_DIR)                       # repo root
 DB_PATH = os.path.join(PROJECT_ROOT, "data", "engineering.db")
-SCHEMA_PATH = os.path.join(SRC_DIR, "schema.sql")
+SCHEMA_PATH = os.path.join(_PACKAGE_DIR, "data", "schema.sql")
 
 # --- LLM (pluggable) ------------------------------------------------------
 # Default: small local model via Ollama (OpenAI-compatible endpoint).
@@ -29,5 +29,5 @@ LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "800"))
 
 # --- Ingestion gateway (API_GATEWAY_DECISION showcase) --------------------
 # The edge agent posts the held-back project bundle here; the gateway writes it
-# into the central DB. Run:  python src/gateway/main.py  (stdlib http.server)
+# into the central DB. Run:  python -m aura.ingestion.gateway  (stdlib http.server)
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")

@@ -14,7 +14,7 @@ import time
 
 import httpx
 
-import config
+from aura import config
 
 _CHAT_URL = f"{config.LLM_BASE_URL}/chat/completions"
 _HEADERS = {"Authorization": f"Bearer {config.LLM_API_KEY}"}

@@ -10,12 +10,12 @@ import sys
 
 # Make the modules in src/ importable (pages live one level below the root).
 sys.path.insert(0, os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+    os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import streamlit as st
 
-import agent
-import ui
+from aura.ai import agent
+from aura import ui
 
 st.set_page_config(page_title="Copilot", page_icon="💬", layout="wide")
 ui.require_db()
