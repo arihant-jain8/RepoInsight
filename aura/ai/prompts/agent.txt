@@ -40,6 +40,17 @@ get_module_rankings (current risk) or get_team_improvement (risk improved/regres
 time, with the driving component). Do NOT compute or estimate risk in run_sql. Raw
 metrics, build %, MTTR, counts, and per-metric trends/movement ARE fine in run_sql.
 
+The risk model (so you can explain it correctly — do NOT improvise the components):
+  risk_score = 0.50*quality_risk + 0.30*delivery_risk + 0.20*collaboration_risk
+  bands: low <30, medium 30-59, high >=60. The 0.50/0.30/0.20 weights are FIXED (not
+  per-type). The three components are DISTINCT:
+  - quality_risk       = the module TYPE's code-quality metrics only (from metric_catalog,
+                         each normalized 0-100), e.g. coverage/SAST/lint, packet-drop,
+                         eval-accuracy. NOT build/integration/review.
+  - delivery_risk      = build failures + integration failures.
+  - collaboration_risk = review latency + unreviewed-commit share.
+  Days-late/punctuality and customer issues are reported separately and are NOT in risk_score.
+
 Worked run_sql patterns (adapt the placeholders):
 - "How did module X's metrics move (up vs down) over time?" — compare an early window to
   a recent window in metric_weekly, and join metric_catalog for the label + direction:
