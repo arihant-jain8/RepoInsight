@@ -68,8 +68,8 @@ def catalog_text() -> str:
 
 
 def validate_spec(spec: dict):
-    """Return (ok, error). Checks chart type, dataset, and that x/y/color are valid
-    fields of that dataset (y must be a value field)."""
+    """Return (ok, error). Checks chart type, dataset, that x/y/color are valid fields
+    of that dataset (y must be a value field), and an optional row filter."""
     if not isinstance(spec, dict):
         return False, "spec must be an object"
     if spec.get("chart_type") not in CHART_TYPES:
@@ -86,6 +86,15 @@ def validate_spec(spec: dict):
         return False, f"y must be a value field of {ds}: {nums}"
     if color not in (None, "") and color not in allf:
         return False, f"color must be a field of {ds} or omitted: {allf}"
+    # Optional filter: keep only rows whose `filter_field` is in `filter_values`
+    # (e.g. chart just two named modules). The model supplies category NAMES, never
+    # data values, so this stays within data-over-code.
+    ff, fv = spec.get("filter_field"), spec.get("filter_values")
+    if ff not in (None, ""):
+        if ff not in cats:
+            return False, f"filter_field must be a category field of {ds}: {cats}"
+        if not isinstance(fv, (list, tuple)) or not fv:
+            return False, "filter_values must be a non-empty list when filter_field is set"
     return True, None
 
 
@@ -98,6 +107,12 @@ def build_figure(spec: dict):
     import plotly.express as px
 
     df = pd.DataFrame(DATASETS[spec["dataset"]][0]())
+    ff = spec.get("filter_field")
+    if ff:
+        vals = [str(v) for v in (spec.get("filter_values") or [])]
+        df = df[df[ff].astype(str).isin(vals)]
+        if df.empty:
+            raise ValueError(f"no rows match {ff} in {spec.get('filter_values')}")
     x, y = spec["x"], spec["y"]
     color = spec.get("color") or None
     title = spec.get("title") or f"{y} by {x}"

@@ -23,12 +23,6 @@ from aura.ai import llm_service
 MAX_STEPS = 6
 _MAX_ROWS = 30  # cap rows fed back to the model per tool result
 
-# Tools whose data maps to a make_chart dataset — used to decide if a proactive
-# chart is worthwhile (weak local models won't volunteer one, so we nudge once).
-_CHARTABLE_TOOLS = {"get_module_rankings", "get_customer_impact", "get_mttr",
-                    "get_ai_efficiency", "get_jira_pipeline", "get_team_improvement"}
-
-
 # -------------------------------------------------------------------------
 # Name resolution
 # -------------------------------------------------------------------------
@@ -222,12 +216,16 @@ def _t_telemetry(module_name: str = "", **_):
 
 
 def _t_make_chart(chart_type: str = "", dataset: str = "", x: str = "",
-                  y: str = "", color: str = "", title: str = "", **_):
+                  y: str = "", color: str = "", title: str = "",
+                  filter_field: str = "", filter_values=None, **_):
     """Validate a chart spec (data-over-code). On success returns the spec for the UI
     to render; on a bad field/dataset returns an error so the model self-corrects."""
     spec = {"chart_type": chart_type, "dataset": dataset, "x": x, "y": y, "title": title}
     if color:
         spec["color"] = color
+    if filter_field:
+        spec["filter_field"] = filter_field
+        spec["filter_values"] = list(filter_values) if filter_values else []
     ok, err = charts.validate_spec(spec)
     if not ok:
         return {"error": err}
@@ -312,14 +310,20 @@ TOOLS = [
     _tool("make_chart",
           "Render a chart for the user when they ask for a graph/chart/plot/visualisation. "
           "Pick chart_type (bar/line/pie), a dataset, and x + y fields (optionally color). "
-          "You do NOT provide data values — the app fills them from the dataset. Datasets:\n"
-          + charts.catalog_text(),
+          "You do NOT provide data values — the app fills them from the dataset. To chart only "
+          "SPECIFIC items (e.g. compare two named modules), set filter_field to a category field "
+          "and filter_values to the exact names to keep — otherwise the chart shows ALL rows. "
+          "Datasets:\n" + charts.catalog_text(),
           {"chart_type": {"type": "string", "description": "bar | line | pie"},
            "dataset": {"type": "string", "description": "one of the dataset names listed above"},
            "x": {"type": "string", "description": "category field for the x-axis (or pie names)"},
            "y": {"type": "string", "description": "value field for the y-axis (or pie values)"},
            "color": {"type": "string", "description": "optional field to group/colour by"},
-           "title": {"type": "string", "description": "a short chart title"}},
+           "title": {"type": "string", "description": "a short chart title"},
+           "filter_field": {"type": "string", "description":
+                            "optional category field to limit the chart to specific rows, e.g. 'module'"},
+           "filter_values": {"type": "array", "items": {"type": "string"}, "description":
+                             "optional: the exact values of filter_field to KEEP, e.g. the two module names"}},
           ["chart_type", "dataset", "x", "y"]),
     _tool("describe_schema", "The real database structure: tables, columns, views and "
           "foreign-key relationships. Use for any question about what tables/columns "
@@ -422,8 +426,6 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
 
     trace = []
     nudged = False
-    chart_nudged = False
-    pending_answer = None   # the real answer captured before a chart nudge
     total_tokens = calls = 0
     chart = None
     for _ in range(MAX_STEPS):
@@ -451,27 +453,7 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
                                  "them, then answer. If your answer is only about the "
                                  "database structure/schema, you may keep it as-is."})
                 continue
-            # Proactive chart: if the answer drew on chartable data but no chart was
-            # made, nudge once to add one (small models won't volunteer it). The nudge
-            # is NON-DESTRUCTIVE: we keep THIS answer as pending_answer, so the follow-up
-            # round can only attach a chart — never replace a good answer with the
-            # meta-reply a weak model often gives ("Understood, I'll call make_chart…").
-            if (chart is None and not chart_nudged
-                    and any(t["tool"] in _CHARTABLE_TOOLS for t in trace)):
-                chart_nudged = True
-                pending_answer = msg.get("content") or ""
-                messages.append({"role": "assistant", "content": pending_answer})
-                messages.append({"role": "user", "content":
-                                 "If your answer compares, ranks, or shows a distribution "
-                                 "or trend across modules, accounts, or customers, call "
-                                 "make_chart now to add a chart that supports it. Otherwise "
-                                 "reply with just the word OK."})
-                continue
-            # Prefer the answer captured before the nudge (the nudge round's text, if any,
-            # is throwaway — its only job was to maybe emit a make_chart call).
-            answer = pending_answer if (chart_nudged and pending_answer) \
-                else (msg.get("content") or "")
-            return {"text": _scrub_sql(answer) or "(no answer)",
+            return {"text": _scrub_sql(msg.get("content") or "") or "(no answer)",
                     "source": "llm", "trace": trace,
                     "tokens": total_tokens, "calls": calls, "chart": chart}
 
