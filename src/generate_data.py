@@ -10,8 +10,10 @@ the worst modules so the customer->commit traceability demo lights up.
 Run once:  python src/generate_data.py
 """
 
+import json
 import os
 import random
+import sys
 from datetime import datetime, timedelta
 
 from faker import Faker
@@ -26,6 +28,12 @@ Faker.seed(42)
 WEEKS = 12
 COMMITS_PER_WEEK = 8
 BASE_DATE = datetime(2025, 1, 6)  # a Monday; W01 starts here
+
+# Live-ingestion demo (API_GATEWAY_DECISION): this project is held back from the
+# central DB into a source bundle and ingested live via the edge agent + gateway.
+# Pass --full to skip the split and keep all 4 projects in the DB (dev convenience).
+HELD_BACK_PROJ_KEY = "proj_ran_5g"     # 5G Core Rollout
+SOURCES_DIR = os.path.join(config.PROJECT_ROOT, "data", "sources")
 
 # --- Organisation: 2 verticals -> 2 accounts -> 4 projects -> 12 modules ------
 # Unit Heads + Project Managers are named (The Office); team leads/engineers are
@@ -340,6 +348,64 @@ def seed_module(cur, project_id, mod_name, pools):
                 pools["comments"] += 1
 
 
+def export_and_remove_project(conn, proj_key):
+    """Lift a whole project (rows incl. ids) out of central into a source bundle
+    JSON, then delete it from the central DB. The project is restored later via the
+    gateway (live-ingestion demo). Returns (path, n_modules, n_commits) or None.
+    """
+    proj = conn.execute(
+        "SELECT * FROM projects WHERE proj_key = ?", (proj_key,)).fetchone()
+    if proj is None:
+        return None
+    pid = proj["id"]
+    account = conn.execute(
+        "SELECT name FROM accounts WHERE id = ?", (proj["account_id"],)).fetchone()["name"]
+    mods = conn.execute(
+        "SELECT * FROM modules WHERE project_id = ?", (pid,)).fetchall()
+    mids = [m["id"] for m in mods]
+    mph = ",".join("?" * len(mids))
+    commits = conn.execute(
+        "SELECT * FROM commits WHERE project_id = ?", (pid,)).fetchall()
+    cids = [c["commit_id"] for c in commits]
+    cph = ",".join("?" * len(cids))
+
+    def fetch(sql, params):
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+    bundle = {
+        "account_name": account,
+        "project": dict(proj),
+        "modules": [dict(m) for m in mods],
+        "engineers": fetch(f"SELECT * FROM engineers WHERE module_id IN ({mph})", mids),
+        "commits": [dict(c) for c in commits],
+        "commit_metrics": fetch(
+            f"SELECT * FROM commit_metrics WHERE commit_id IN ({cph})", cids) if cids else [],
+        "review_comments": fetch(
+            f"SELECT * FROM review_comments WHERE commit_id IN ({cph})", cids) if cids else [],
+        "jira_logs": fetch(f"SELECT * FROM jira_logs WHERE module_id IN ({mph})", mids),
+        "performance_data": fetch(
+            f"SELECT * FROM performance_data WHERE module_id IN ({mph})", mids),
+    }
+    os.makedirs(SOURCES_DIR, exist_ok=True)
+    path = os.path.join(SOURCES_DIR, f"{proj_key}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(bundle, f, indent=2)
+
+    # Delete from central, FK-safe: break modules->engineers, then children-first.
+    cur = conn.cursor()
+    cur.execute("UPDATE modules SET team_lead_id = NULL WHERE project_id = ?", (pid,))
+    if cids:
+        cur.execute(f"DELETE FROM review_comments WHERE commit_id IN ({cph})", cids)
+        cur.execute(f"DELETE FROM commit_metrics WHERE commit_id IN ({cph})", cids)
+    cur.execute(f"DELETE FROM jira_logs WHERE module_id IN ({mph})", mids)
+    cur.execute(f"DELETE FROM performance_data WHERE module_id IN ({mph})", mids)
+    cur.execute("DELETE FROM commits WHERE project_id = ?", (pid,))
+    cur.execute(f"DELETE FROM engineers WHERE module_id IN ({mph})", mids)
+    cur.execute("DELETE FROM modules WHERE project_id = ?", (pid,))
+    cur.execute("DELETE FROM projects WHERE id = ?", (pid,))
+    return path, len(mods), len(commits)
+
+
 def main():
     # Fresh reseed: start from a clean DB so schema changes (e.g. the
     # customer_issues table->view transition) never collide with stale objects.
@@ -455,6 +521,12 @@ def main():
                  round(random.uniform(lo_c, hi_c), 1), incidents))
             total_perf += 1
 
+    # Hold one project back for the live-ingestion demo (API_GATEWAY_DECISION),
+    # unless --full is passed (dev: keep all 4 projects in the DB).
+    held = None
+    if "--full" not in sys.argv:
+        held = export_and_remove_project(conn, HELD_BACK_PROJ_KEY)
+
     conn.commit()
     conn.close()
 
@@ -465,6 +537,12 @@ def main():
     print(f"  review_comments : {pools['comments']}")
     print(f"  jira_logs       : {total_tickets}")
     print(f"  performance_data: {total_perf}")
+    if held:
+        path, nmods, ncommits = held
+        print(f"  held back       : {HELD_BACK_PROJ_KEY} -> {os.path.relpath(path)} "
+              f"({nmods} modules, {ncommits} commits) - ingest live via the agent")
+    else:
+        print(f"  held back       : none (--full) — all 4 projects in the DB")
 
 
 if __name__ == "__main__":

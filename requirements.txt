@@ -4,9 +4,7 @@ pandas==3.0.3
 httpx==0.28.1
 faker==40.22.0
 
-# Phase 2: federated ingestion (FastAPI gateway + edge agent).
-# Edge agent posts via httpx (already above) — no `requests` needed.
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-pydantic==2.10.4
+# Phase 2 ingestion showcase (API_GATEWAY_DECISION): the gateway uses the Python
+# stdlib (http.server) — no FastAPI/uvicorn, which would pin starlette<0.42 and
+# clash with Streamlit 1.58. The edge agent posts via httpx (already above).
 # when real git ingestion lands: GitPython

@@ -40,7 +40,7 @@ insights — all served from a **static, pre-seeded database**.
 - [Phase 0 — Gap snapshot](#phase-0--gap-snapshot)
 - [Reference — Data structures](#reference--data-structures-verbatim-from-auramd)
 - [Phase 1 — Data model](#phase-1--data-model) ✅ done
-- [Phase 2 — Ingestion architecture showcase](#phase-2--ingestion-architecture-showcase) 🔖
+- [Phase 2 — Ingestion architecture showcase](#phase-2--ingestion-architecture-showcase) ✅ done
 - [Phase 3 — ~~Live data generator~~ (dropped)](#phase-3--live-data-generator-dropped)
 - [Phase 4 — Analytics rollups](#phase-4--analytics-rollups)
 - [Phase 5 — Persona dashboards + view scoping](#phase-5--persona-dashboards--view-scoping)
@@ -267,34 +267,34 @@ def generate_mock_git_log():
 
 ### Steps
 
-- [ ] **1.1 — Extend the hierarchy** in `src/schema.sql` to `vertical_units → accounts → projects → modules`:
-  - [ ] **1.1.1** Add the new tables to the `DROP TABLE` block at the top of `schema.sql` (children-first), so reseed stays idempotent.
-  - [ ] **1.1.2** `CREATE TABLE vertical_units(id, name)`.
-  - [ ] **1.1.3** `CREATE TABLE accounts(id, vertical_id FK→vertical_units, name, customer, customer_status)`.
-  - [ ] **1.1.4** Alter `projects`: add `account_id FK→accounts`, drop `unit_id`.
-  - [ ] **1.1.5** Alter `modules`: add `issue_status` (low / medium / high).
-  - [ ] **1.1.6** Update every view/query that referenced `units` / `unit_id` (`weekly_summary`, `customer_trace`, any joins) to walk `accounts → vertical_units`.
-- [ ] **1.2 — Add AI-tooling fields:**
-  - [ ] **1.2.1** Alter `commits`: `ai_agent_used TEXT`, `ai_generated_percentage REAL`, `lines_added INT`, `lines_removed INT`, `code_churn_score TEXT`.
-  - [ ] **1.2.2** `CREATE TABLE ai_tool_efficiency(account_id FK, manual_triage_hours_saved, mttr_reduction_percentage, ai_resolved_tickets_count)`.
-- [ ] **1.3 — Add Jira lifecycle:**
-  - [ ] **1.3.1** `CREATE TABLE jira_logs(ticket_id, module_id, ticket_type, customer, summary, severity, status, raised_time, resolve_time, automation_percentage, assigned_to, task_name, lifecycle_status, completed_date)` — `lifecycle_status` ∈ {study, implementation, review, testing, deployment}.
-    > **Decision (flatten):** `AURA.md`'s `jira_logs` nests `pm_view_data.*` / `tl_view_data.*`; SQLite has no nested type, so we **flatten** to the columns above and rebuild the nesting in Phase 7 (Mongo). Field map — PM: `ticket_id, customer, summary, severity, status, raised_time, resolve_time, automation_percentage` (from `pm_view_data.ai_assistance.automation_percentage`); TL: `assigned_to, lifecycle_status, completed_date` (+ `task_name` from `tl_view_data`).
-  - [ ] **1.3.2** `CREATE VIEW customer_issues` over `jira_logs` (back-compat shim for `analytics.py`).
-  - [ ] **1.3.3** Confirm existing customer queries in `analytics.py` still resolve through the view.
-- [ ] **1.4 — Add telemetry** — `CREATE TABLE performance_data(module_id, metric_source, timestamp, issue_status, packet_drop_rate, latency_ms, cpu_utilization_percentage, associated_incidents)`.
-- [ ] **1.5 — Seed in `src/generate_data.py`:**
-  - [ ] **1.5.1** Replace the `METRIC_CATALOG` dict with the retuned values from [§1.5b](#-15b--retuned-metric_catalog).
-  - [ ] **1.5.2** Seed `vertical_units` (Telecomm, BFSI) and `accounts` (GlobalTel Wireless, Nexus Digital Bank).
-  - [ ] **1.5.3** Seed the 4 projects (5G Core/AT&T, Edge/Verizon, Payments/Citibank, Wealth/Barclays).
-  - [ ] **1.5.4** Seed the 12 modules with the types from [§1.5a](#-15a--module--type-mapping).
-  - [ ] **1.5.5** Bias each module's metric severity so computed risk matches its `AURA.md` label (RAN Packet Parser, Ledger Clearing → RED; etc.).
-  - [ ] **1.5.6** Populate the new commit AI fields + one `ai_tool_efficiency` row per account.
-  - [ ] **1.5.7** Generate `jira_logs` (ticket lifecycle) and `performance_data` (telemetry) rows per module.
-- [ ] **1.6 — Verify:**
-  - [ ] **1.6.1** Run the seeder; sanity-check row counts (2 / 2 / 4 / 12).
-  - [ ] **1.6.2** Run `risk_engine.compute_module_risk` over all 12; confirm RED/AMBER/GREEN match `AURA.md` labels.
-  - [ ] **1.6.3** Launch Streamlit; confirm Overview + persona pages render with no errors.
+- [x] **1.1 — Extend the hierarchy** in `src/schema.sql` to `vertical_units → accounts → projects → modules`:
+  - [x] **1.1.1** Add the new tables to the `DROP TABLE` block at the top of `schema.sql` (children-first), so reseed stays idempotent.
+  - [x] **1.1.2** `CREATE TABLE vertical_units(id, name, head)` — replaces the old `units` table.
+  - [x] **1.1.3** `CREATE TABLE accounts(id, vertical_id FK→vertical_units, name, customer_status)` — `customer` lives on `projects`, not here.
+  - [x] **1.1.4** Alter `projects`: add `account_id FK→accounts` + `customer`, drop `unit_id`.
+  - [x] **1.1.5** Alter `modules`: add `issue_status` (low / medium / high).
+  - [x] **1.1.6** Update every view/query that referenced `units` / `unit_id` to walk `accounts → vertical_units`; dropped dead `commits.unit_id`.
+- [x] **1.2 — Add AI-tooling fields:**
+  - [x] **1.2.1** Alter `commits`: `ai_agent_used TEXT`, `ai_generated_percentage REAL`, `lines_added INT`, `lines_removed INT`, `code_churn_score TEXT`.
+  - [x] **1.2.2** `CREATE TABLE ai_tool_efficiency(account_id FK, manual_triage_hours_saved, mttr_reduction_percentage, ai_resolved_tickets_count)`.
+- [x] **1.3 — Add Jira lifecycle:**
+  - [x] **1.3.1** `CREATE TABLE jira_logs(id, ticket_id, module_id, commit_id, ticket_type, summary, severity, status, raised_time, resolve_time, automation_percentage, assigned_to, task_name, lifecycle_status, completed_date)`. Added `commit_id` (issue→commit traceability) + `id`; no `customer` column (derived via `module → project.customer`).
+    > **Decision (flatten):** `AURA.md`'s `jira_logs` nests `pm_view_data.*` / `tl_view_data.*`; SQLite has no nested type, so we **flatten** to the columns above and rebuild the nesting in Phase 7 (Mongo).
+  - [x] **1.3.2** `CREATE VIEW customer_issues` over `jira_logs`; dropped the `customers` table (customer = `project.customer`); rewrote `customer_trace`.
+  - [x] **1.3.3** Confirmed `analytics.py` customer queries resolve through the view.
+- [x] **1.4 — Add telemetry** — `CREATE TABLE performance_data(id, module_id, metric_source, timestamp, issue_status, packet_drop_rate, latency_ms, cpu_utilization_percentage, associated_incidents)`.
+- [x] **1.5 — Seed in `src/generate_data.py`:**
+  - [x] **1.5.1** Replaced the `METRIC_CATALOG` dict with the retuned values from [§1.5b](#-15b--retuned-metric_catalog).
+  - [x] **1.5.2** Seeded `vertical_units` (Telecomm, BFSI) and `accounts` (GlobalTel Wireless, Nexus Digital Bank). Personas from The Office.
+  - [x] **1.5.3** Seeded the 4 projects (5G Core/AT&T, Edge/Verizon, Payments/Citibank, Wealth/Barclays).
+  - [x] **1.5.4** Seeded the 12 modules with the types from [§1.5a](#-15a--module--type-mapping).
+  - [x] **1.5.5** Biased each module's metric severity so computed risk matches its label.
+  - [x] **1.5.6** Populated the new commit AI fields + one `ai_tool_efficiency` row per account.
+  - [x] **1.5.7** Generated `jira_logs` (ticket lifecycle) and `performance_data` (telemetry) rows per module.
+- [x] **1.6 — Verify:**
+  - [x] **1.6.1** Ran the seeder; row counts confirmed (2 / 2 / 4 / 12).
+  - [x] **1.6.2** Ran `risk_engine.compute_module_risk` over all 12 — **12/12 match** their `AURA.md` label.
+  - [x] **1.6.3** Launched Streamlit; Overview + persona pages render. *(Required the analytics hierarchy fix — pulled forward from Phase 4.)*
 
 ### § 1.5a — Module → type mapping
 
@@ -364,15 +364,15 @@ def generate_mock_git_log():
 
 ### Steps
 
-- [x] **2.1 — Deps** — `fastapi`, `uvicorn[standard]`, `pydantic` added (edge agent posts via existing `httpx`; no `requests`).
+- [x] **2.1 — Deps** — *(corrected)* FastAPI/uvicorn were tried but **reverted**: FastAPI pins `starlette<0.42`, which clashes with Streamlit 1.58 (`starlette 1.2.x`). The gateway uses the **stdlib `http.server`** instead (zero new deps); the edge agent posts via existing `httpx`.
 - [x] **2.2 — AURA id columns** — `projects.proj_key` + `modules.mod_key` added & seeded ([§1.5a](#-15a--module--type-mapping) names ↔ AURA slugs).
-- [ ] **2.3 — Write seam** `src/repository.py` — `ingest_project_bundle(bundle)`: insert a project + its modules, engineers, commits (+ commit_metrics, review_comments), jira_logs, performance_data into the central DB, resolving the account by name. Reused by gateway *and* seeder (single insert path).
-- [ ] **2.4 — Seeder split** `src/generate_data.py` — after the full seed, **export 5G Core Rollout** (project + 3 modules + all activity) to `data/sources/proj_ran_5g.json`, then **delete those rows** from the central DB. Central ships with 3 projects. (Add a `--full` flag to skip the split for dev.)
-- [ ] **2.5 — Gateway** `src/gateway/main.py` — `POST /ingest/project` (accepts the bundle → `repository.ingest_project_bundle`), `GET /healthz`, `GET /stats` (row counts for the page). Pydantic-validated.
-- [ ] **2.6 — Edge agent** `src/edge_agent.py` — reads `data/sources/proj_ran_5g.json`, `filter_fields()` ($exists semantics), `forward()` → POST to the gateway via `httpx`.
-- [ ] **2.7 — Architecture page** `pages/0X_architecture.py` — diagram (4 edge agents → API gateway → central staging DB); 3 boxes "loaded ✓", the 5G Core one with a **"Run agent"** button that triggers the ingest; live row counts from `/stats`; the project appears after running.
-- [ ] **2.8 — Config** `src/config.py`: `GATEWAY_URL` (default `http://localhost:8000`).
-- [ ] **2.9 — Verify** — fresh seed → app shows 3 projects → run agent → 5G Core Rollout + RED RAN Packet Parser appear; risk labels still 12/12.
+- [x] **2.3 — Write seam** `src/repository.py` — `ingest_project_bundle(bundle)` inserts a project + its modules, engineers, commits (+ commit_metrics, review_comments), jira_logs, performance_data (original ids, account resolved by name, idempotent). + `remove_project()` for the demo reset.
+- [x] **2.4 — Seeder split** `src/generate_data.py` — `export_and_remove_project()` lifts 5G Core Rollout to `data/sources/proj_ran_5g.json` and deletes it from central; `--full` skips the split. Reviews kept within a project so it's cleanly separable. Central ships with 3 projects.
+- [x] **2.5 — Gateway** `src/gateway/main.py` — **stdlib `http.server`** (not FastAPI): `POST /ingest/project` → `repository.ingest_project_bundle`, `GET /healthz`, `GET /stats`. Run: `python src/gateway/main.py`.
+- [x] **2.6 — Edge agent** `src/edge_agent.py` — reads `data/sources/proj_ran_5g.json`, `filter_fields()` ($exists semantics), `forward()` → POST to the gateway via `httpx`. *(No hashing/sanitise — dropped.)*
+- [x] **2.7 — Architecture page** `pages/06_architecture.py` — diagram (4 edge agents → gateway → central staging DB); board + counts read **directly from the DB** (correct even when gateway offline); **▶ Run agent** triggers the ingest, **↺ Reset demo** holds 5G Core back for a repeatable loop.
+- [x] **2.8 — Config** `src/config.py`: `GATEWAY_URL` (default `http://localhost:8000`).
+- [x] **2.9 — Verify** — fresh seed → 3 projects → run agent → 4 projects, 5G Core + RED RAN Packet Parser appear; **risk 12/12**; reset → back to 3; loop repeatable. End-to-end confirmed live.
 
 ---
 
@@ -478,21 +478,21 @@ and the [Appendix](#appendix--nextjs-frontend-deferred) (Next.js) are deferred.
 
 | File | Phase | Action |
 |---|---|---|
-| `src/schema.sql` | 1 | + verticals/accounts, AI cols, `jira_logs`, `performance_data` |
-| `src/generate_data.py` | 1, 3 | reseed 12 modules + retuned catalog; stays one-shot backfill |
-| `mock_generators.py` *(new)* | 3 | live streaming POST loop + anomaly trigger |
-| `src/gateway/main.py` *(new)* | 2 | FastAPI ingestion endpoints |
-| `src/edge_agent.py` *(new)* | 2 | filter + sanitize + salted SHA-256 + POST |
-| `src/rbac.py` *(new)* | 5 | `Principal`, scope filters, persona guardrails |
+| `src/schema.sql` | 1 ✅, 2 ✅ | + verticals/accounts, AI cols, `jira_logs`, `performance_data`; `proj_key`/`mod_key` |
+| `src/generate_data.py` | 1 ✅, 2 ✅ | 12 modules + retuned catalog; AURA id keys; project hold-back/export |
+| `src/repository.py` *(new)* | 2 ✅ (7) | write seam: `ingest_project_bundle` + `remove_project`; Mongo impl in P7 |
+| `src/gateway/main.py` *(new)* | 2 ✅ | stdlib `http.server` ingestion gateway (`/ingest/project`, `/healthz`, `/stats`) |
+| `src/edge_agent.py` *(new)* | 2 ✅ | `filter_fields` ($exists) + `forward()` POST via `httpx` (no hashing — dropped) |
+| `pages/06_architecture.py` *(new)* | 2 ✅ | ingestion showcase: diagram + ▶ Run agent + ↺ Reset demo, DB-driven board |
+| `src/rbac.py` *(new)* | 5 | persona view scoping (light; heavy RBAC dropped) |
 | `src/chart_spec.py` *(new)* | 6 | Pydantic chart-spec schema + validation |
 | `src/orchestrator.py` *(new)* | 6 | multi-agent over existing tools |
-| `src/repository.py` *(new)* | 7 | storage seam; SQLite + Mongo impls |
-| `src/analytics.py` | 4, 7 | AI efficiency, MTTR, Jira/telemetry rollups; Mongo pipelines |
-| `src/agent.py` | 5, 6 | inject RBAC scope into dispatch + run_sql |
-| `src/config.py` | 2, 7 | `GATEWAY_URL`, `AURA_HASH_SALT`, `AURA_DB_BACKEND` |
-| `pages/01–03_*.py` | 5 | build `Principal` per role; render scoped data + chart specs |
-| `requirements.txt` | 2, 6, 7 | + fastapi, uvicorn, pydantic, langgraph, (pymongo in P7) |
-| `README.md`, `docs/DEMO.md` | — | new run path (gateway + `mock_generators`) |
+| `src/analytics.py` | 1 ✅, 4 | hierarchy fix (done); + AI efficiency, MTTR, Jira/telemetry rollups |
+| `src/agent.py` | 1 ✅, 4, 6 | schema-prompt fix (done); + new tools, soft scope |
+| `src/config.py` | 2 ✅, 7 | `GATEWAY_URL` (done); `AURA_DB_BACKEND` (P7) |
+| `pages/01–03_*.py` | 1 ✅, 5 | risk-level rename + hierarchy fix (done); persona dashboards |
+| `requirements.txt` | 2 ✅, 6, 7 | net no new deps in P2 (stdlib gateway); langgraph (P6), pymongo (P7) |
+| `README.md`, `docs/DEMO.md` | — | new run path (gateway + Architecture page) |
 
 > **Frozen:** `src/risk_engine.py` math stays untouched; only its module→type input mapping changes.
 
