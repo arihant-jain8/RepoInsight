@@ -412,10 +412,12 @@ def _trace_entry(name: str, args: dict, result) -> dict:
 
 
 def agent_chat(message: str, history: list[dict] | None = None) -> dict:
-    """Tool-using chat. Returns {'text', 'source', 'trace', 'tokens', 'calls'}."""
+    """Tool-using chat. Returns {'text', 'source', 'trace', 'tokens', 'prompt_tokens',
+    'completion_tokens', 'calls', 'chart'} — token counts summed across the tool loop."""
     if not llm_service.is_available():
         res = llm_service.chat(message, history)
-        res.update({"trace": [], "tokens": 0, "calls": 0, "chart": None})
+        res.update({"trace": [], "tokens": 0, "prompt_tokens": 0,
+                    "completion_tokens": 0, "calls": 0, "chart": None})
         return res
 
     messages = [{"role": "system", "content": _prompt()}]
@@ -426,16 +428,20 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
 
     trace = []
     nudged = False
-    total_tokens = calls = 0
+    total_tokens = prompt_tokens = completion_tokens = calls = 0
     chart = None
     for _ in range(MAX_STEPS):
         msg, usage = _chat_raw(messages, tools=TOOLS)
         calls += 1
         total_tokens += usage.get("total_tokens", 0)
+        prompt_tokens += usage.get("prompt_tokens", 0)
+        completion_tokens += usage.get("completion_tokens", 0)
         if msg is None:  # transport error mid-loop -> fallback
             res = llm_service.chat(message, history)
-            res.update({"trace": trace, "tokens": total_tokens, "calls": calls,
-                        "chart": chart})
+            res.update({"trace": trace, "tokens": total_tokens,
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "calls": calls, "chart": chart})
             return res
 
         tool_calls = msg.get("tool_calls")
@@ -454,8 +460,10 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
                                  "database structure/schema, you may keep it as-is."})
                 continue
             return {"text": _scrub_sql(msg.get("content") or "") or "(no answer)",
-                    "source": "llm", "trace": trace,
-                    "tokens": total_tokens, "calls": calls, "chart": chart}
+                    "source": "llm", "trace": trace, "tokens": total_tokens,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "calls": calls, "chart": chart}
 
         messages.append({"role": "assistant", "content": msg.get("content") or "",
                          "tool_calls": tool_calls})
@@ -477,7 +485,10 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
                                           "content": "Answer now using the data above; do not call tools."}])
     calls += 1
     total_tokens += usage.get("total_tokens", 0)
+    prompt_tokens += usage.get("prompt_tokens", 0)
+    completion_tokens += usage.get("completion_tokens", 0)
     text = _scrub_sql(final.get("content") if final else "") or \
         "I gathered data but couldn't finalise an answer — try narrowing the question."
-    return {"text": text, "source": "llm", "trace": trace,
-            "tokens": total_tokens, "calls": calls, "chart": chart}
+    return {"text": text, "source": "llm", "trace": trace, "tokens": total_tokens,
+            "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
+            "calls": calls, "chart": chart}

@@ -44,15 +44,18 @@ def _run_metered(label, messages):
 
 
 def _run_agentic(label, question):
-    """The agentic copilot: total tokens come from agent_chat; latency is wall-clock."""
+    """The agentic copilot: tokens are summed across its tool-loop calls; latency is
+    wall-clock for the whole loop. tok/s = total completion tokens ÷ latency."""
     with perf.GpuPeakSampler() as gpu:
         t0 = time.perf_counter()
         res = agent.agent_chat(question)
         latency = round(time.perf_counter() - t0, 2)
+    completion = res.get("completion_tokens", 0)
     return {
         "scenario": label, "calls": res.get("calls", 0),
-        "prompt_tok": "—", "completion_tok": "—",
-        "total_tok": res.get("tokens", 0), "latency_s": latency, "tok_per_s": "—",
+        "prompt_tok": res.get("prompt_tokens", 0), "completion_tok": completion,
+        "total_tok": res.get("tokens", 0), "latency_s": latency,
+        "tok_per_s": round(completion / latency, 1) if latency else 0,
         "peak_util_%": round(gpu.peak["util_pct"]), "peak_mem_GB": round(gpu.peak["mem_used_mb"] / 1024, 2),
         "ok": True, "error": "",
     }
