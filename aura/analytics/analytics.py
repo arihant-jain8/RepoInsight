@@ -40,7 +40,11 @@ def get_metric_catalog(module_type: str | None = None) -> list[dict]:
 # -------------------------------------------------------------------------
 def get_module_health(module_id: int, weeks: int = 4) -> dict:
     """Aggregate metrics for a module over the last N weeks (risk-engine input)."""
-    wks = _last_weeks(weeks)
+    return _module_health(module_id, _last_weeks(weeks))
+
+
+def _module_health(module_id: int, wks: list[str]) -> dict:
+    """Aggregate a module's risk-engine inputs over an explicit set of weeks."""
     ph = _placeholders(wks)
 
     meta = database.query(
@@ -209,6 +213,54 @@ def get_all_module_rankings(weeks: int = 4) -> list[dict]:
             "quality_trend": health["quality_trend"], "breakdown": risk["breakdown"],
         })
     return sorted(rows, key=lambda r: r["risk_score"], reverse=True)
+
+
+# Friendly labels for the three risk components that can drive an improvement.
+_COMPONENT_LABEL = {
+    "quality_risk": "code quality", "delivery_risk": "build & integration",
+    "collab_risk": "review collaboration",
+}
+
+
+def get_team_improvement() -> list[dict]:
+    """Rank teams (modules) by how much their risk score IMPROVED over time.
+
+    Compares each module's composite risk over an early window (first half of the
+    weeks) vs a recent window (last half), using the same risk engine. A positive
+    ``risk_delta`` means risk fell = the team improved. ``driver`` names the risk
+    component (quality / delivery / collaboration) that improved the most, so the
+    answer can say *based on what metrics*. Sorted most-improved first.
+    """
+    allw = _all_weeks()
+    if len(allw) < 2:
+        return []
+    half = max(1, len(allw) // 2)
+    early_w, recent_w = allw[:half], allw[-half:]
+    early_lbl = f"{early_w[0]}-{early_w[-1]}"
+    recent_lbl = f"{recent_w[0]}-{recent_w[-1]}"
+
+    rows = []
+    for m in database.query("SELECT id FROM modules"):
+        early = risk_engine.compute_module_risk(_module_health(m["id"], early_w))
+        recent = risk_engine.compute_module_risk(_module_health(m["id"], recent_w))
+        meta = get_module_health(m["id"])  # for names (recent default window)
+        deltas = {k: round(early["breakdown"][k] - recent["breakdown"][k], 1)
+                  for k in early["breakdown"]}              # +ve = that part improved
+        driver_key = max(deltas, key=deltas.get)
+        rows.append({
+            "module": meta["name"], "type": meta["type"],
+            "team_lead": meta["team_lead"], "project": meta["project"],
+            "account": meta["account"], "unit": meta["unit"],
+            "risk_early": early["score"], "risk_recent": recent["score"],
+            "risk_delta": round(early["score"] - recent["score"], 1),
+            "improved": early["score"] > recent["score"],
+            "quality_delta": deltas["quality_risk"],
+            "delivery_delta": deltas["delivery_risk"],
+            "collab_delta": deltas["collab_risk"],
+            "driver": _COMPONENT_LABEL[driver_key] if deltas[driver_key] > 0 else "n/a",
+            "early_window": early_lbl, "recent_window": recent_lbl,
+        })
+    return sorted(rows, key=lambda r: r["risk_delta"], reverse=True)
 
 
 def get_type_benchmark(module_id: int, weeks: int = 4) -> dict:

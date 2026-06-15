@@ -23,6 +23,11 @@ from aura.ai import llm_service
 MAX_STEPS = 6
 _MAX_ROWS = 30  # cap rows fed back to the model per tool result
 
+# Tools whose data maps to a make_chart dataset — used to decide if a proactive
+# chart is worthwhile (weak local models won't volunteer one, so we nudge once).
+_CHARTABLE_TOOLS = {"get_module_rankings", "get_customer_impact", "get_mttr",
+                    "get_ai_efficiency", "get_jira_pipeline", "get_team_improvement"}
+
 
 # -------------------------------------------------------------------------
 # Name resolution
@@ -193,6 +198,10 @@ def _t_ai_efficiency(**_):
     return analytics.get_account_ai_efficiency()
 
 
+def _t_team_improvement(**_):
+    return analytics.get_team_improvement()
+
+
 def _t_jira_pipeline(project_name: str = "", **_):
     pid = None
     if project_name:
@@ -239,6 +248,7 @@ _DISPATCH = {
     "get_metric_catalog": _t_metric_catalog,
     "get_mttr": _t_mttr,
     "get_ai_efficiency": _t_ai_efficiency,
+    "get_team_improvement": _t_team_improvement,
     "get_jira_pipeline": _t_jira_pipeline,
     "get_telemetry": _t_telemetry,
     "make_chart": _t_make_chart,
@@ -289,6 +299,11 @@ TOOLS = [
           "from resolved jira tickets."),
     _tool("get_ai_efficiency", "Per-account AI tooling efficiency: manual hours saved, "
           "MTTR-reduction %, AI-resolved ticket count, plus computed MTTR (days)."),
+    _tool("get_team_improvement", "Which teams improved (or regressed) the most over time: "
+          "each team's (module's) composite risk score in an early window vs a recent window, "
+          "the risk_delta (positive = improved/risk fell), and the driver component (code "
+          "quality / build & integration / review collaboration) behind it. Ranked "
+          "most-improved first. Use for 'who improved the most / by how much / based on what'."),
     _tool("get_jira_pipeline", "Jira ticket pipeline (ticket id, severity, status, lifecycle "
           "stage, assignee, AI automation %, causing commit). Optionally scope to a project.",
           _PROJECT_ARG),
@@ -371,9 +386,15 @@ _SQL_LINE = re.compile(r"(?im)^\s*(?:SELECT|WITH)\b.*$")
 
 
 def _scrub_sql(text: str) -> str:
-    """Strip fenced code blocks and standalone SQL lines from a user-facing answer."""
+    """Strip fenced code blocks and standalone SQL lines from a user-facing answer.
+
+    Also drops any markdown image the model invents (e.g. ![chart](chart_image_url)) —
+    real charts are rendered separately from the chart spec, so an inline image is
+    always a broken placeholder.
+    """
     text = _SQL_FENCE.sub("", text)
     text = _SQL_LINE.sub("", text)
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
@@ -401,6 +422,8 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
 
     trace = []
     nudged = False
+    chart_nudged = False
+    pending_answer = None   # the real answer captured before a chart nudge
     total_tokens = calls = 0
     chart = None
     for _ in range(MAX_STEPS):
@@ -428,7 +451,27 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
                                  "them, then answer. If your answer is only about the "
                                  "database structure/schema, you may keep it as-is."})
                 continue
-            return {"text": _scrub_sql(msg.get("content") or "") or "(no answer)",
+            # Proactive chart: if the answer drew on chartable data but no chart was
+            # made, nudge once to add one (small models won't volunteer it). The nudge
+            # is NON-DESTRUCTIVE: we keep THIS answer as pending_answer, so the follow-up
+            # round can only attach a chart — never replace a good answer with the
+            # meta-reply a weak model often gives ("Understood, I'll call make_chart…").
+            if (chart is None and not chart_nudged
+                    and any(t["tool"] in _CHARTABLE_TOOLS for t in trace)):
+                chart_nudged = True
+                pending_answer = msg.get("content") or ""
+                messages.append({"role": "assistant", "content": pending_answer})
+                messages.append({"role": "user", "content":
+                                 "If your answer compares, ranks, or shows a distribution "
+                                 "or trend across modules, accounts, or customers, call "
+                                 "make_chart now to add a chart that supports it. Otherwise "
+                                 "reply with just the word OK."})
+                continue
+            # Prefer the answer captured before the nudge (the nudge round's text, if any,
+            # is throwaway — its only job was to maybe emit a make_chart call).
+            answer = pending_answer if (chart_nudged and pending_answer) \
+                else (msg.get("content") or "")
+            return {"text": _scrub_sql(answer) or "(no answer)",
                     "source": "llm", "trace": trace,
                     "tokens": total_tokens, "calls": calls, "chart": chart}
 

@@ -48,6 +48,13 @@ DATASETS = {
         ["avg_days_late", "delivered", "team_size"],
         "delivery punctuality per module",
     ),
+    "team_improvement": (
+        analytics.get_team_improvement,
+        ["module", "type", "project", "account", "driver"],
+        ["risk_delta", "risk_early", "risk_recent",
+         "quality_delta", "delivery_delta", "collab_delta"],
+        "teams ranked by risk-score improvement over time (risk_delta>0 = improved)",
+    ),
 }
 
 
