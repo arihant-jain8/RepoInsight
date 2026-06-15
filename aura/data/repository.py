@@ -9,7 +9,7 @@ This is the single insert path the gateway depends on, so a future Mongo backend
 (Phase 7) only has to reimplement this module.
 """
 
-import database
+from aura.data import database
 
 
 def _remove_project(conn, proj_key: str) -> None:

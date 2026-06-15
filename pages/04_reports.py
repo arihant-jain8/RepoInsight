@@ -5,13 +5,13 @@ import sys
 
 # Make the modules in src/ importable (pages live one level below the root).
 sys.path.insert(0, os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+    os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import streamlit as st
 
-import analytics
-import llm_service
-import ui
+from aura.analytics import analytics
+from aura.ai import llm_service
+from aura import ui
 
 st.set_page_config(page_title="AI Reports", page_icon="📝", layout="wide")
 ui.require_db()

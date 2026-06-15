@@ -4,9 +4,9 @@ import os
 
 import streamlit as st
 
-import analytics
-import config
-import llm_service
+from aura.analytics import analytics
+from aura import config
+from aura.ai import llm_service
 
 RISK_COLORS = {"low": "#2ecc71", "medium": "#f39c12", "high": "#e74c3c"}
 RISK_EMOJI = {"low": "🟢", "medium": "🟠", "high": "🔴"}
@@ -17,7 +17,7 @@ def require_db() -> None:
     if not os.path.exists(config.DB_PATH):
         st.warning(
             "No database found. Generate it first:\n\n"
-            "```\npython src/generate_data.py\n```"
+            "```\npython -m aura.data.generate_data\n```"
         )
         st.stop()
 

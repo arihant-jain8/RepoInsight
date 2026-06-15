@@ -7,7 +7,7 @@ through here, so swapping SQLite for Postgres later means changing only this fil
 import os
 import sqlite3
 
-import config
+from aura import config
 
 
 def connect() -> sqlite3.Connection:

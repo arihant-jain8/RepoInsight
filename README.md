@@ -69,7 +69,7 @@ This seeds the central `data/engineering.db` (12 modules × 12 weeks of commits,
 quality metrics, review comments, Jira tickets, and telemetry).
 
 ```powershell
-python src/generate_data.py
+python -m aura.data.generate_data
 ```
 
 Expected output:
@@ -89,7 +89,7 @@ Seeded central engineering.db:
 > **5G Core Rollout** out of the central DB into `data/sources/proj_ran_5g.json`, so the app
 > ships with **3 of 4 projects**. You ingest the 4th live on the **🛰️ Architecture** page (see
 > [Federated ingestion demo](#federated-ingestion-demo)). To keep all 4 projects in the DB:
-> `python src/generate_data.py --full`.
+> `python -m aura.data.generate_data --full`.
 
 > A pre-generated `data/engineering.db` is committed, so this step is optional — re-run it any
 > time to reset the data.
@@ -148,7 +148,7 @@ gateway** into the **central staging DB**, live. (The other 3 projects ship pre-
 **1. Start the gateway** in a second terminal (stdlib `http.server`, no extra deps):
 
 ```powershell
-python src/gateway/main.py            # serves on http://localhost:8000
+python -m aura.ingestion.gateway            # serves on http://localhost:8000
 ```
 
 **2. In the app**, open **🛰️ Architecture**:
@@ -157,7 +157,7 @@ python src/gateway/main.py            # serves on http://localhost:8000
   into the DB → the project (and its RED **RAN Packet Parser**) appears, **4 projects** now.
 - Click **↺ Reset demo** to hold it back again and repeat.
 
-You can also run the agent from the CLI: `python src/edge_agent.py proj_ran_5g`.
+You can also run the agent from the CLI: `python -m aura.ingestion.edge_agent proj_ran_5g`.
 
 ---
 
@@ -177,37 +177,30 @@ machine. The page degrades gracefully if no model or GPU tool is present.
 
 ```
 RepoInsight/
-├── app.py                  # Streamlit entrypoint (Executive Overview)
-├── pages/                  # Streamlit views (01 unit head … 07 performance)
-│   ├── 01_unit_head.py     02_project_manager.py   03_team_lead.py
-│   ├── 04_reports.py       05_copilot.py
-│   ├── 06_architecture.py  # federated ingestion showcase
-│   └── 07_performance.py   # inference metrics (tokens / latency / GPU)
-├── src/                    # core logic (importable modules)
-│   ├── config.py           # central DB path + pluggable LLM + GATEWAY_URL
-│   ├── database.py         # SQLite connection + query helpers
-│   ├── schema.sql          # all table + view DDL
-│   ├── generate_data.py    # seed the central DB (run once; --full keeps all 4 projects)
-│   ├── analytics.py        # metrics: health, risk inputs, MTTR, AI efficiency, jira, telemetry
-│   ├── risk_engine.py      # low/medium/high risk scoring per module
-│   ├── llm_service.py      # pluggable LLM client + data-driven fallback
-│   ├── agent.py            # tool-using copilot agent (live DB + read-only SQL)
-│   ├── repository.py       # ingestion write-seam (restore a project bundle)
-│   ├── edge_agent.py       # edge ingestion agent (reads source bundle, POSTs to gateway)
-│   ├── perf.py             # GPU / token / latency benchmark helpers
-│   ├── gateway/main.py     # stdlib ingestion gateway (POST /ingest/project, /healthz, /stats)
-│   ├── prompts/            # report.txt, copilot.txt, agent.txt
-│   └── ui.py               # risk colours, cached loaders, AI insight widget
+├── app.py                    # Streamlit entrypoint (Executive Overview); imports from aura.*
+├── pages/                    # Streamlit views (01 unit head … 07 performance)
+│   ├── 01_unit_head.py  02_project_manager.py  03_team_lead.py  04_reports.py  05_copilot.py
+│   ├── 06_architecture.py    # federated ingestion showcase
+│   └── 07_performance.py     # inference metrics (tokens / latency / GPU)
+├── aura/                     # core logic, a package grouped by concern
+│   ├── config.py             # central DB path + pluggable LLM + GATEWAY_URL
+│   ├── ui.py                 # risk colours, cached loaders, AI insight widget
+│   ├── data/                 # database.py, schema.sql, generate_data.py, repository.py
+│   ├── analytics/            # analytics.py (metrics), risk_engine.py (low/medium/high scoring)
+│   ├── ai/                   # llm_service.py, agent.py (copilot), perf.py (benchmark), prompts/
+│   └── ingestion/            # edge_agent.py, gateway.py (stdlib /ingest /healthz /stats)
 ├── data/
-│   ├── engineering.db      # generated SQLite database (ships with 3 of 4 projects)
-│   └── sources/            # held-back project bundle for the live-ingestion demo
-├── docs/                   # design + architecture notes (AURA.md is the blueprint)
+│   ├── engineering.db        # generated SQLite database (ships with 3 of 4 projects)
+│   └── sources/              # held-back project bundle for the live-ingestion demo
+├── docs/                     # design + architecture notes (AURA.md is the blueprint)
 ├── requirements.txt
 └── README.md
 ```
 
 > `app.py` and `pages/` stay at the project root because Streamlit requires the entrypoint and
-> its `pages/` directory together. They add `src/` to the import path at startup.
+> its `pages/` directory together. They add the repo root to the import path so they can
+> `from aura.* import …`. Run the CLI tools as modules from the root, e.g.
+> `python -m aura.data.generate_data` and `python -m aura.ingestion.gateway`.
 
 ---
 
@@ -250,8 +243,8 @@ ollama serve            # often already running as a background service
 | Problem | Fix |
 |---|---|
 | `streamlit: command not found` | Use `python -m streamlit run app.py`. |
-| Dashboard says "No database found" | Run `python src/generate_data.py` first. |
-| Architecture page: gateway 🔴 offline | Start it: `python src/gateway/main.py`. |
+| Dashboard says "No database found" | Run `python -m aura.data.generate_data` first. |
+| Architecture page: gateway 🔴 offline | Start it: `python -m aura.ingestion.gateway`. |
 | Only 3 projects / 5G Core missing | Intended — ingest it on the Architecture page, or seed with `--full`. |
 | PowerShell won't activate the venv | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or use `.\.venv\Scripts\python.exe` directly. |
 | Port 8501 already in use | `python -m streamlit run app.py --server.port 8502`. |
@@ -262,8 +255,8 @@ ollama serve            # often already running as a background service
 ## Resetting
 
 ```powershell
-python src/generate_data.py            # re-seed (3 projects + held-back 5G Core)
-python src/generate_data.py --full     # re-seed with all 4 projects in the DB
+python -m aura.data.generate_data            # re-seed (3 projects + held-back 5G Core)
+python -m aura.data.generate_data --full     # re-seed with all 4 projects in the DB
 ```
 
 The generator deletes and recreates the DB on each run, so it is safe to re-run any time.

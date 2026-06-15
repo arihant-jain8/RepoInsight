@@ -8,7 +8,7 @@ rest are pre-loaded.
 Dynamic schema filtering ($exists semantics): forward only fields that are present
 — never break on a missing key.
 
-CLI:  python src/edge_agent.py [proj_key]
+CLI:  python -m aura.ingestion.edge_agent [proj_key]
 """
 
 import json
@@ -16,7 +16,7 @@ import os
 
 import httpx
 
-import config
+from aura import config
 
 SOURCES_DIR = os.path.join(config.PROJECT_ROOT, "data", "sources")
 

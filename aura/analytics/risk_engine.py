@@ -6,7 +6,7 @@ anchors and direction, then weight-averaged. Delivery (build + integration) and
 collaboration (review latency + unreviewed commits) are shared across all types.
 """
 
-import database
+from aura.data import database
 
 _CATALOG = None  # process-level cache; the catalog is static
 

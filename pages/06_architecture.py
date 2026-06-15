@@ -9,16 +9,16 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+    os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import httpx
 import streamlit as st
 
-import config
-import database
-import edge_agent
-import repository
-import ui
+from aura import config
+from aura.data import database
+from aura.ingestion import edge_agent
+from aura.data import repository
+from aura import ui
 
 st.set_page_config(page_title="Architecture", page_icon="🛰️", layout="wide")
 ui.require_db()
@@ -93,7 +93,7 @@ if online:
 else:
     st.error(
         f"🔴 Gateway offline (`{config.GATEWAY_URL}`). Start it from the project root:\n\n"
-        "```\npython src/gateway/main.py\n```"
+        "```\npython -m aura.ingestion.gateway\n```"
     )
 
 # Live-agent trigger

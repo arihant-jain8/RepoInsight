@@ -9,17 +9,17 @@ import sys
 
 # Make the modules in src/ importable (pages live one level below the root).
 sys.path.insert(0, os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+    os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-import analytics
-import database
-import llm_service
-import risk_engine
-import ui
+from aura.analytics import analytics
+from aura.data import database
+from aura.ai import llm_service
+from aura.analytics import risk_engine
+from aura import ui
 
 st.set_page_config(page_title="Team Lead", page_icon="🛠️", layout="wide")
 ui.require_db()
