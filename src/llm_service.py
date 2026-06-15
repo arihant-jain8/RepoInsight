@@ -142,10 +142,26 @@ def _org_context() -> dict:
 # -------------------------------------------------------------------------
 # Public generators
 # -------------------------------------------------------------------------
-def _report(role: str, scope: str, context: dict, fallback) -> dict:
+def _report_messages(role: str, scope: str, context: dict) -> list[dict]:
+    """The chat messages for a report — single source for generators + benchmark."""
     prompt = _prompt("report.txt").format(
         role=role, scope=scope, context=json.dumps(context, indent=2))
-    out = _call([{"role": "user", "content": prompt}])
+    return [{"role": "user", "content": prompt}]
+
+
+def org_messages(role: str = "Unit Head") -> list[dict]:
+    """Messages for the org-summary report (used by the perf benchmark)."""
+    return _report_messages(role, "entire organisation", _org_context())
+
+
+def module_messages(module_id: int, role: str = "Team Lead") -> list[dict]:
+    """Messages for a module deep-dive report (used by the perf benchmark)."""
+    ctx = _module_context(module_id)
+    return _report_messages(role, f"module {ctx['module']} (project {ctx['project']})", ctx)
+
+
+def _report(role: str, scope: str, context: dict, fallback) -> dict:
+    out = _call(_report_messages(role, scope, context))
     if out:
         return {"text": out, "source": "llm"}
     return {"text": fallback(role, context), "source": "fallback"}
