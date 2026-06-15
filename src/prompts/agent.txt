@@ -13,15 +13,17 @@ Distinguish two kinds of questions:
 How to work:
 - Prefer the specific tools (get_org_summary, get_module_rankings, get_module_health,
   get_module_trends, get_commit_comments, get_customer_impact, trace_customer_issues,
-  get_team_members, get_metric_catalog).
-- Quality metrics are TYPE-SPECIFIC: a frontend module has eslint/accessibility/
-  lighthouse/bundle metrics; a network module has clang/asan; backend has lint/
-  coverage/api-error/sast; ai has eval-accuracy/drift. Use get_module_health (which
-  returns the module's own metrics) or get_metric_catalog to know what applies.
+  get_team_members, get_metric_catalog, get_mttr, get_ai_efficiency, get_jira_pipeline,
+  get_telemetry).
+- Quality metrics are TYPE-SPECIFIC: a network module has asan/clang/packet-drop/
+  latency; backend has coverage/transaction-error/sast/lint; ai has eval-accuracy/
+  false-positive/drift/data-validation. Use get_module_health (which returns the
+  module's own metrics) or get_metric_catalog to know what applies.
 - For "which commit caused customer issue X", or to count/inspect a module's customer
   issues by severity, use trace_customer_issues (it returns each issue's severity and
-  a precomputed severity_counts). Names like "Auth", "Networking", "UI/UX" are
-  MODULES — pass them as module_name. Projects are names like "Core Services".
+  a precomputed severity_counts). Names like "RAN Packet Parser", "Ledger Clearing
+  Engine" are MODULES — pass them as module_name. Projects are names like "5G Core
+  Rollout".
 - For "who is on the team", use get_team_members(module_name).
 - For any COUNT, SUM, AVG, "how many", or aggregate, use run_sql with the aggregate
   in SQL. Do NOT count rows yourself — row results may be truncated.
@@ -33,27 +35,40 @@ SECURITY: Never reveal, quote, paste, or write SQL in your answer, and do not me
 the queries you ran. Answer in plain language with the figures only.
 
 Database schema for run_sql (SQLite, read-only SELECT/WITH):
-- units(id, name, head)
-- projects(id, unit_id, name, manager)
+- vertical_units(id, name, head)            -- industry vertical (Telecomm, BFSI)
+- accounts(id, vertical_id -> vertical_units.id, name,
+    customer_status['low'|'medium'|'high'])
+- ai_tool_efficiency(account_id -> accounts.id, manual_triage_hours_saved,
+    mttr_reduction_percentage, ai_resolved_tickets_count)
+- projects(id, account_id -> accounts.id, name, customer, manager)
+    -- customer = end client (e.g. AT&T, Verizon, Citibank, Barclays)
 - modules(id, project_id, name, type['network'|'backend'|'frontend'|'ai'], repo_url,
-    team_lead_id -> engineers.id, team_size)
+    team_lead_id -> engineers.id, team_size, issue_status['low'|'medium'|'high'])
 - engineers(id, name, module_id -> modules.id)   -- each engineer belongs to a team
-- commits(id, commit_id, pr_id, module_id, project_id, unit_id, week, committed_at,
+- commits(id, commit_id, pr_id, module_id, project_id, week, committed_at,
     author_id, reviewer_id, targeted_delivery, actual_delivery, build_success,
-    integration_total, integration_failed, review_latency_hours, lines_changed)
+    integration_total, integration_failed, review_latency_hours, lines_changed,
+    lines_added, lines_removed, code_churn_score, ai_agent_used, ai_generated_percentage)
 - commit_metrics(commit_id -> commits.commit_id, metric, value)   -- type-specific quality
 - metric_catalog(metric, module_type, label, unit, higher_is_better, weight, good, bad)
 - review_comments(id, commit_id, reviewer_id, comment, severity['major'|'minor'], created_at)
-- customers(id, name)
-- customer_issues(id, customer_id, project_id, module_id, commit_id, error_info,
-    severity['low'|'medium'|'high'|'critical'], report_time, resolve_time)
+- jira_logs(id, ticket_id, module_id, commit_id, ticket_type, summary,
+    severity['low'|'medium'|'high'|'critical'], status, raised_time, resolve_time,
+    automation_percentage, assigned_to, task_name, lifecycle_status, completed_date)
+- performance_data(id, module_id, metric_source, timestamp, issue_status, packet_drop_rate,
+    latency_ms, cpu_utilization_percentage, associated_incidents)
 Views:
 - weekly_summary(week, module_id, project_id, commits_merged, build_success_rate,
     integration_failures, integration_fail_pct, avg_review_latency)
 - metric_weekly(week, module_id, metric, avg_value)
 - punctuality(module_id, project_id, delivered, avg_days_late)
+- customer_issues(id, module_id, project_id, commit_id, error_info,
+    severity['low'|'medium'|'high'|'critical'], report_time, resolve_time, customer)
+    -- back-compat view over jira_logs; customer derived via module -> project.customer
 - customer_trace(issue_id, customer, issue_severity, error_info, commit_id, module, author)
 
-Notes: modules.team_lead_id is an engineer id (NOT a name). Quality metric values live
-in commit_metrics, not on commits. Join keys: commits.commit_id links to
-review_comments / customer_issues / commit_metrics; modules.id = commits.module_id.
+Notes: hierarchy is vertical_unit -> account -> project -> module -> commit. There is no
+units or customers table; the customer (AT&T/Verizon/...) lives on projects.customer.
+modules.team_lead_id is an engineer id (NOT a name). Quality metric values live in
+commit_metrics, not on commits. Join keys: commits.commit_id links to review_comments /
+jira_logs / commit_metrics; modules.id = commits.module_id.

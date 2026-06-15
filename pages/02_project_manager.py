@@ -34,6 +34,16 @@ project_id = proj["id"]
 # Modules in this project (with risk), filtered by project name.
 ranks = [r for r in ui.load_rankings() if r["project"] == proj["name"]]
 
+# --- Delivery KPI row -----------------------------------------------------
+kpi = analytics.get_project_delivery_kpis(project_id)
+build_pct = (sum(r["build_success_rate"] for r in ranks) / len(ranks)) if ranks else 0.0
+k1, k2, k3, k4, k5 = st.columns(5)
+k1.metric("Open tickets", kpi["open_count"] or 0)
+k2.metric("🔴 High/critical open", kpi["high_crit_open"] or 0)
+k3.metric("Avg MTTR", f"{kpi['mttr_days'] or 0:.1f} d")
+k4.metric("Build success", f"{build_pct:.1f}%")
+k5.metric("AI usage", f"{kpi['ai_assisted_pct'] or 0:.0f}%")
+
 st.divider()
 
 # --- AI insight (this project, Project Manager tone) ---------------------
@@ -55,41 +65,41 @@ mdf = pd.DataFrame([{
 } for r in ranks])
 st.dataframe(ui.style_risk_level(mdf), width="stretch", hide_index=True)
 
-# --- Commit-wise comment counts per module -------------------------------
-st.subheader("Review comments by module (major vs minor)")
-comment_rows = []
-for r in ranks:
-    for cc in analytics.get_commit_comments(r["module_id"]):
-        comment_rows.append({"module": r["module"], "major": cc["major"],
-                             "minor": cc["minor"]})
-if comment_rows:
-    cdf = (pd.DataFrame(comment_rows).groupby("module")[["major", "minor"]]
-           .sum().reset_index().melt(id_vars="module", var_name="severity",
-                                     value_name="comments"))
-    fig = px.bar(cdf, x="module", y="comments", color="severity",
-                 barmode="group",
-                 color_discrete_map={"major": "#e74c3c", "minor": "#95a5a6"},
-                 labels={"comments": "Review comments", "module": "Module"})
-    st.plotly_chart(fig, width="stretch")
-
-# --- Drill into one module's commit-wise comments ------------------------
-st.subheader("Commit-wise comment counts")
-mod_pick = st.selectbox("Module", [r["module"] for r in ranks])
-mod_id = next(r["module_id"] for r in ranks if r["module"] == mod_pick)
-ccdf = pd.DataFrame(analytics.get_commit_comments(mod_id))
-if not ccdf.empty:
-    ccdf = ccdf[["commit_id", "pr_id", "week", "author", "major", "minor", "total"]]
-st.dataframe(ccdf, width="stretch", hide_index=True)
-
-st.divider()
-
-# --- Customer issue -> commit traceability -------------------------------
-st.subheader("Customer issues → commit traceability")
-st.caption("Which commit (and author/module) is linked to each customer issue.")
-trace = analytics.get_customer_trace(project_id)
-if trace:
-    tdf = pd.DataFrame(trace)[
-        ["customer", "issue_severity", "module", "author", "commit_id", "error_info"]]
-    st.dataframe(tdf, width="stretch", hide_index=True)
+# --- Ticket pipeline governance (status / lifecycle / severity) ----------
+st.subheader("Ticket pipeline governance")
+pipe = analytics.get_jira_pipeline(project_id)
+if not pipe:
+    st.info("No customer tickets for this project. 🎉")
 else:
-    st.info("No customer issues linked to this project. 🎉")
+    pdf = pd.DataFrame(pipe)
+    SEV_ORDER = ["low", "medium", "high", "critical"]
+    SEV_COLORS = {"low": "#2ecc71", "medium": "#f39c12",
+                  "high": "#e67e22", "critical": "#e74c3c"}
+    LIFE_ORDER = ["study stage", "implementation stage", "review stage",
+                  "testing stage", "deployment stage"]
+    g1, g2, g3 = st.columns(3)
+    with g1:
+        sc = pdf.groupby("status").size().reset_index(name="tickets")
+        st.plotly_chart(px.bar(sc, x="status", y="tickets", title="By status"),
+                        width="stretch")
+    with g2:
+        lc = pdf.groupby("lifecycle_status").size().reset_index(name="tickets")
+        st.plotly_chart(px.bar(lc, x="lifecycle_status", y="tickets",
+                               title="By lifecycle stage",
+                               category_orders={"lifecycle_status": LIFE_ORDER}),
+                        width="stretch")
+    with g3:
+        vc = pdf.groupby("severity").size().reset_index(name="tickets")
+        st.plotly_chart(px.bar(vc, x="severity", y="tickets", title="By severity",
+                               color="severity", category_orders={"severity": SEV_ORDER},
+                               color_discrete_map=SEV_COLORS), width="stretch")
+
+    # --- Customer review / ticket pipeline (table) -----------------------
+    st.subheader("Customer review / ticket pipeline")
+    st.caption("`ai_usage_%` = how much AI was used to handle the incident. "
+               "Plus severity, status, lifecycle stage, and the causing commit.")
+    jdf = pdf[["ticket_id", "module", "customer", "severity", "status",
+               "lifecycle_status", "assigned_to", "automation_percentage",
+               "raised_time", "resolve_time", "commit_id"]].rename(
+        columns={"automation_percentage": "ai_usage_%"})
+    st.dataframe(jdf, width="stretch", hide_index=True)

@@ -183,6 +183,34 @@ def _t_describe_schema(**_):
             "relationships": rels}
 
 
+def _t_mttr(**_):
+    return {"by_module": analytics.get_mttr_by_module(),
+            "by_account": analytics.get_mttr_by_account()}
+
+
+def _t_ai_efficiency(**_):
+    return analytics.get_account_ai_efficiency()
+
+
+def _t_jira_pipeline(project_name: str = "", **_):
+    pid = None
+    if project_name:
+        p = _resolve_project(project_name)
+        if not p:
+            return {"error": f"Unknown project '{project_name}'.",
+                    "available": [x["name"] for x in analytics.list_projects()]}
+        pid = p["id"]
+    return analytics.get_jira_pipeline(pid)[:_MAX_ROWS]
+
+
+def _t_telemetry(module_name: str = "", **_):
+    m = _resolve_module(module_name)
+    if not m:
+        return {"error": f"Unknown module '{module_name}'.",
+                "available": [x["name"] for x in analytics.list_modules()]}
+    return analytics.get_telemetry(m["id"])
+
+
 _DISPATCH = {
     "list_modules": _t_list_modules,
     "list_projects": _t_list_projects,
@@ -195,6 +223,10 @@ _DISPATCH = {
     "trace_customer_issues": _t_trace_customer_issues,
     "get_team_members": _t_team_members,
     "get_metric_catalog": _t_metric_catalog,
+    "get_mttr": _t_mttr,
+    "get_ai_efficiency": _t_ai_efficiency,
+    "get_jira_pipeline": _t_jira_pipeline,
+    "get_telemetry": _t_telemetry,
     "describe_schema": _t_describe_schema,
     "run_sql": _t_run_sql,
 }
@@ -208,7 +240,8 @@ def _tool(name, desc, props=None, required=None):
                        "required": required or []}}}
 
 
-_MODULE_ARG = {"module_name": {"type": "string", "description": "Module name, e.g. 'Auth'"}}
+_MODULE_ARG = {"module_name": {"type": "string",
+                               "description": "Module name, e.g. 'RAN Packet Parser'"}}
 _PROJECT_ARG = {"project_name": {"type": "string",
                                  "description": "Project name; omit for org-wide"}}
 
@@ -237,6 +270,15 @@ TOOLS = [
           "(label, unit, direction, good/bad thresholds). Pass module_type to scope.",
           {"module_type": {"type": "string",
                            "description": "network | backend | frontend | ai"}}),
+    _tool("get_mttr", "Mean time to resolution (days) per module and per account, "
+          "from resolved jira tickets."),
+    _tool("get_ai_efficiency", "Per-account AI tooling efficiency: manual hours saved, "
+          "MTTR-reduction %, AI-resolved ticket count, plus computed MTTR (days)."),
+    _tool("get_jira_pipeline", "Jira ticket pipeline (ticket id, severity, status, lifecycle "
+          "stage, assignee, AI automation %, causing commit). Optionally scope to a project.",
+          _PROJECT_ARG),
+    _tool("get_telemetry", "Real-time telemetry samples for a module (packet drop rate, "
+          "latency, CPU utilisation, associated incidents).", _MODULE_ARG, ["module_name"]),
     _tool("describe_schema", "The real database structure: tables, columns, views and "
           "foreign-key relationships. Use for any question about what tables/columns "
           "exist or how the database is structured."),
@@ -250,7 +292,8 @@ TOOLS = [
 # -------------------------------------------------------------------------
 # Transport + loop
 # -------------------------------------------------------------------------
-def _chat_raw(messages: list[dict], tools=None) -> dict | None:
+def _chat_raw(messages: list[dict], tools=None):
+    """Returns (message, usage). On any failure returns (None, {})."""
     payload = {"model": config.LLM_MODEL, "messages": messages,
                "temperature": 0.2, "stream": False}
     if tools:
@@ -261,9 +304,10 @@ def _chat_raw(messages: list[dict], tools=None) -> dict | None:
                        headers={"Authorization": f"Bearer {config.LLM_API_KEY}"},
                        timeout=config.LLM_TIMEOUT)
         r.raise_for_status()
-        return r.json()["choices"][0]["message"]
+        data = r.json()
+        return data["choices"][0]["message"], (data.get("usage") or {})
     except Exception:
-        return None
+        return None, {}
 
 
 def _dispatch(name: str, args: dict):
@@ -316,10 +360,10 @@ def _trace_entry(name: str, args: dict, result) -> dict:
 
 
 def agent_chat(message: str, history: list[dict] | None = None) -> dict:
-    """Tool-using chat. Returns {'text', 'source', 'trace'}."""
+    """Tool-using chat. Returns {'text', 'source', 'trace', 'tokens', 'calls'}."""
     if not llm_service.is_available():
         res = llm_service.chat(message, history)
-        res["trace"] = []
+        res.update({"trace": [], "tokens": 0, "calls": 0})
         return res
 
     messages = [{"role": "system", "content": _prompt()}]
@@ -330,11 +374,14 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
 
     trace = []
     nudged = False
+    total_tokens = calls = 0
     for _ in range(MAX_STEPS):
-        msg = _chat_raw(messages, tools=TOOLS)
+        msg, usage = _chat_raw(messages, tools=TOOLS)
+        calls += 1
+        total_tokens += usage.get("total_tokens", 0)
         if msg is None:  # transport error mid-loop -> fallback
             res = llm_service.chat(message, history)
-            res["trace"] = trace
+            res.update({"trace": trace, "tokens": total_tokens, "calls": calls})
             return res
 
         tool_calls = msg.get("tool_calls")
@@ -353,7 +400,8 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
                                  "database structure/schema, you may keep it as-is."})
                 continue
             return {"text": _scrub_sql(msg.get("content") or "") or "(no answer)",
-                    "source": "llm", "trace": trace}
+                    "source": "llm", "trace": trace,
+                    "tokens": total_tokens, "calls": calls}
 
         messages.append({"role": "assistant", "content": msg.get("content") or "",
                          "tool_calls": tool_calls})
@@ -369,8 +417,11 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
                              "content": json.dumps(result, default=str)[:6000]})
 
     # Hit the step cap — force a final text answer with the data gathered so far.
-    final = _chat_raw(messages + [{"role": "user",
-                                   "content": "Answer now using the data above; do not call tools."}])
+    final, usage = _chat_raw(messages + [{"role": "user",
+                                          "content": "Answer now using the data above; do not call tools."}])
+    calls += 1
+    total_tokens += usage.get("total_tokens", 0)
     text = _scrub_sql(final.get("content") if final else "") or \
         "I gathered data but couldn't finalise an answer — try narrowing the question."
-    return {"text": text, "source": "llm", "trace": trace}
+    return {"text": text, "source": "llm", "trace": trace,
+            "tokens": total_tokens, "calls": calls}

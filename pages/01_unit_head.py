@@ -38,9 +38,28 @@ total_people = sum(r["team_size"] for r in view)
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Teams / Modules", len(view))
 c2.metric("People", total_people)
-c3.metric("🔴 Critical", sum(1 for r in view if r["risk_level"] == "RED"))
+c3.metric("🔴 Critical", sum(1 for r in view if r["risk_level"] == "high"))
 c4.metric("Avg Build Success",
           f"{(sum(r['build_success_rate'] for r in view) / len(view)):.1f}%")
+
+st.divider()
+
+# --- AI Tool Efficiency per client (AURA.md Unit Head headline) -----------
+st.subheader("AI tool efficiency — per client")
+st.caption("How much the AI tooling cuts customer MTTR and manual effort, per account.")
+eff = analytics.get_account_ai_efficiency()
+if unit != "All units":
+    eff = [e for e in eff if e["unit"] == unit]
+for col, e in zip(st.columns(max(len(eff), 1)), eff):
+    with col:
+        st.markdown(f"**{e['account']}**")
+        reason = (f" — {e['n_critical']} critical ({', '.join(e['critical_modules'])})"
+                  if e["n_critical"] else "")
+        st.caption(f"{e['unit']} · account risk tier: **{e['risk_tier']}**{reason}")
+        st.metric("MTTR reduction", f"{e['mttr_reduction_percentage']:.0f}%")
+        st.metric("Manual hours saved", f"{e['manual_triage_hours_saved']:.0f}")
+        st.metric("AI-resolved tickets", e["ai_resolved_tickets_count"])
+        st.caption(f"Current MTTR ≈ {e['mttr_days']:.1f} days")
 
 st.divider()
 
@@ -53,7 +72,47 @@ ui.render_ai_insight(
 
 st.divider()
 
-# --- 1) Code-quality bar graph (with team size) --------------------------
+
+# --- 1) Customer-reported errors (raised / open by severity + share) -----
+st.subheader("Customer-reported errors")
+st.caption("Per customer: tickets raised, how many are still unresolved (by "
+           "severity), and each customer's share of reported issues.")
+cis = analytics.get_customer_issue_status()
+if unit != "All units":
+    cis = [r for r in cis if r["unit"] == unit]
+cisdf = pd.DataFrame(cis)
+if cisdf.empty:
+    st.info("No customer tickets.")
+else:
+    SEV_ORDER = ["low", "medium", "high", "critical"]
+    SEV_COLORS = {"low": "#2ecc71", "medium": "#f39c12",
+                  "high": "#e67e22", "critical": "#e74c3c"}
+    raised_by_cust = cisdf.groupby("customer")["raised"].sum().reset_index()
+    g1, g2, g3 = st.columns(3)
+    with g1:
+        st.plotly_chart(px.bar(
+            cisdf, x="customer", y="raised", color="severity",
+            category_orders={"severity": SEV_ORDER}, color_discrete_map=SEV_COLORS,
+            title="Raised", labels={"raised": "Tickets raised", "customer": "Customer"},
+        ), width="stretch")
+    with g2:
+        st.plotly_chart(px.bar(
+            cisdf, x="customer", y="open_count", color="severity",
+            category_orders={"severity": SEV_ORDER}, color_discrete_map=SEV_COLORS,
+            title="Still open (unresolved)",
+            labels={"open_count": "Tickets still open", "customer": "Customer"},
+        ), width="stretch")
+    with g3:
+        st.plotly_chart(px.pie(
+            raised_by_cust, names="customer", values="raised",
+            title="Share of issues", hole=0.4,
+        ), width="stretch")
+    hc = (cisdf[cisdf["severity"].isin(["high", "critical"])]
+          .groupby("customer")["raised"].sum())
+    st.caption("High/critical issues per customer: " +
+               (", ".join(f"{c} ({int(n)})" for c, n in hc.items()) or "none"))
+
+# --- 2) Code-quality bar graph (with team size) --------------------------
 st.subheader("Code quality by team")
 st.caption("Quality score = 100 − quality risk. Bar labels show team size (people).")
 qdf = pd.DataFrame([{
@@ -72,7 +131,7 @@ fig_q.update_traces(texttemplate="👥 %{text}", textposition="outside")
 fig_q.update_layout(yaxis_range=[0, 100])
 st.plotly_chart(fig_q, width="stretch")
 
-# --- 2) Punctuality per team ---------------------------------------------
+# --- 3) Punctuality per team ---------------------------------------------
 st.subheader("Punctuality — average days late vs plan")
 punc = analytics.get_punctuality_by_module()
 if unit != "All units":
@@ -86,23 +145,3 @@ fig_p = px.bar(
 )
 fig_p.update_traces(textposition="outside")
 st.plotly_chart(fig_p, width="stretch")
-
-# --- 3) Errors reported per customer -------------------------------------
-st.subheader("Customer-reported errors")
-impact = analytics.get_customer_impact()
-idf = pd.DataFrame(impact)
-ec1, ec2 = st.columns(2)
-with ec1:
-    fig_c = px.bar(
-        idf, x="customer", y="issues", text="issues", color="customer",
-        labels={"issues": "Issues reported", "customer": "Customer"},
-    )
-    fig_c.update_traces(textposition="outside")
-    fig_c.update_layout(showlegend=False)
-    st.plotly_chart(fig_c, width="stretch")
-with ec2:
-    fig_pie = px.pie(idf, names="customer", values="issues",
-                     title="Share of reported issues", hole=0.4)
-    st.plotly_chart(fig_pie, width="stretch")
-st.caption("High/critical issues per customer: " +
-           ", ".join(f"{r['customer']} ({r['high_critical']})" for r in impact))

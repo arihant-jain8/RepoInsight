@@ -1,22 +1,29 @@
 # Engineering Intelligence Copilot
 
-An AI-powered engineering-management dashboard. It consolidates engineering activity
-across a **unit → project → module → commit** hierarchy into one central SQLite database,
-scores team risk, tracks delivery punctuality, traces customer-reported issues back to the
-**exact commit** that caused them, and presents **role-based** views for Unit Heads, Project
-Managers, and Team Leads.
+An AI-powered engineering-management dashboard. It consolidates engineering activity across a
+multi-tenant **vertical → account → project → module → commit** hierarchy into one central
+SQLite database, scores team risk, tracks delivery punctuality and ticket MTTR, traces
+customer-reported issues back to the **exact commit** that caused them, and presents
+**role-based** views for Unit Heads, Project Managers, and Team Leads.
 
-The MVP runs on **synthetic, git-shaped data** so the whole system works end-to-end with no
-external services. The schema is designed so a real per-module git ingestion worker can drop
-in later with no schema change.
+It also includes a **federated-ingestion showcase** (an edge agent pushes a project into the
+central DB live through an API gateway) and an **inference-performance benchmark** (tokens,
+latency, and GPU usage of the AI core).
+
+The demo runs on **static, synthetic, git-shaped data** so the whole system works end-to-end
+with no external services. The current dataset: **2 verticals (Telecomm, BFSI) → 2 accounts
+→ 4 projects → 12 modules**.
 
 ---
 
 ## Prerequisites
 
-- **Python 3.12+** (developed on 3.12.6)
+- **Python 3.12+**
 - **git**
 - Windows, macOS, or Linux. Commands below show **Windows PowerShell**; equivalents are noted.
+- *(Optional, for real AI output)* **Ollama** + a local model — see [LLM configuration](#llm-configuration).
+- *(Optional, for the Performance page GPU metrics)* an NVIDIA GPU (`nvidia-smi`) or AMD/ROCm
+  GPU (`rocm-smi` / `amd-smi`).
 
 ---
 
@@ -58,8 +65,8 @@ python -m pip install -r requirements.txt
 
 ### 3. Generate the synthetic database
 
-This seeds the central `data/engineering.db` (8 modules × 12 weeks of commits, review
-comments, customers, and customer issues).
+This seeds the central `data/engineering.db` (12 modules × 12 weeks of commits, type-aware
+quality metrics, review comments, Jira tickets, and telemetry).
 
 ```powershell
 python src/generate_data.py
@@ -69,15 +76,23 @@ Expected output:
 
 ```
 Seeded central engineering.db:
-  engineers       : 24
-  commits         : 768
-  review_comments : 2007
-  customers       : 3
-  customer_issues : 75
+  engineers       : 68 (across teams)
+  commits         : 1152
+  commit_metrics  : 4608
+  review_comments : ~2900
+  jira_logs       : 127
+  performance_data: 72
+  held back       : proj_ran_5g -> data\sources\proj_ran_5g.json (3 modules, 288 commits) - ingest live via the agent
 ```
 
-> A pre-generated `data/engineering.db` is committed to the repo, so this step is optional —
-> but re-run it any time to reset the data.
+> **Note — one project is held back for the live-ingestion demo.** The seeder lifts
+> **5G Core Rollout** out of the central DB into `data/sources/proj_ran_5g.json`, so the app
+> ships with **3 of 4 projects**. You ingest the 4th live on the **🛰️ Architecture** page (see
+> [Federated ingestion demo](#federated-ingestion-demo)). To keep all 4 projects in the DB:
+> `python src/generate_data.py --full`.
+
+> A pre-generated `data/engineering.db` is committed, so this step is optional — re-run it any
+> time to reset the data.
 
 ### 4. Run the dashboard
 
@@ -85,7 +100,7 @@ Seeded central engineering.db:
 python -m streamlit run app.py
 ```
 
-Then open **http://localhost:8501** in your browser. (Streamlit usually opens it for you.)
+Then open **http://localhost:8501**. (Streamlit usually opens it for you.)
 
 ---
 
@@ -95,28 +110,66 @@ The sidebar lists these views:
 
 | View | Audience | What it shows |
 |---|---|---|
-| **Executive Overview** (home) | Everyone | Org KPIs, risk-ranked modules, highest-risk / fastest-improving callouts, raw-table browser |
-| **🏢 Unit Head** | Non-technical, org-wide | Code-quality bars with team size, punctuality, customer-reported errors |
-| **📋 Project Manager** | One project | Module risk, major/minor review comments, **customer issue → commit traceability** |
-| **🛠️ Team Lead** | One module | Type-specific quality metrics, per-commit drill-down, trend charts, team roster, same-type benchmark, commits behind customer issues |
-| **📝 AI Reports** | Any | Generate a role-aware report for a module / project / org, and download it as Markdown |
-| **💬 Management Copilot** | Any | Tool-using **agent** — queries the live DB (analytics + read-only SQL) to answer, and shows the tools it called |
+| **Executive Overview** (home) | Everyone | Org KPIs, risk-ranked modules (high/medium/low), highest-risk / fastest-improving callouts, raw-table browser |
+| **🏢 Unit Head** | Non-technical, org-wide | AI-tool-efficiency per client (MTTR reduction, hours saved) with a derived **account risk tier**, merged customer-reported-errors (raised vs still-open by severity + share), code quality, punctuality |
+| **📋 Project Manager** | One project | Delivery KPI row (open / high-crit / MTTR / build % / AI usage), **ticket pipeline governance** (by status / lifecycle / severity), customer ticket pipeline |
+| **🛠️ Team Lead** | One module | Task overview, type-specific quality metrics, per-commit drill-down, trends, team roster, live telemetry, commits behind customer issues |
+| **📝 AI Reports** | Any | Generate a role-aware report for a module / project / org, export as Markdown |
+| **💬 Management Copilot** | Any | Tool-using **agent** — queries the live DB (analytics + read-only SQL) and shows the tools it called |
+| **🛰️ Architecture** | Demo | Federated ingestion showcase — run the edge agent to ingest 5G Core Rollout live (see below) |
+| **⚡ Performance** | Demo | Inference benchmark — tokens, end-to-end latency, and GPU usage of the AI core |
 
-Each role page also has an inline **🧠 Generate AI insight** button that writes a
-report for that page's data, right next to its charts.
+Each role page also has an inline **🧠 Generate AI insight** button.
 
-**Type-aware quality:** each module has a `type` (network / backend / frontend / ai)
-and is scored on that type's own metrics (clang/ASAN for network; ESLint/accessibility/
-Lighthouse/bundle for frontend; coverage/lint/API-error/SAST for backend; eval-accuracy/
-drift for ai) via `metric_catalog` + `commit_metrics`. Modules are benchmarked against
-**same-type** peers. Engineers belong to a module's team, so "who's on the UI/UX team"
-is a real answer.
+**Type-aware quality:** each module has a `type` (network / backend / frontend / ai) and is
+scored on that type's own metrics via `metric_catalog` + `commit_metrics`:
+- **network** — ASAN failures, clang warnings, packet-drop rate, p99 latency
+- **backend** — test coverage, transaction error rate, SAST findings, lint errors
+- **ai** — eval accuracy, false-positive rate, model drift, data-validation failures
+
+Risk is `0.50·quality + 0.30·delivery + 0.20·collaboration`, banded into **low (<30) /
+medium (30–59) / high (≥60)**. Modules are benchmarked against **same-type** peers.
 
 ### AI behaviour (works with or without a model)
 
-The AI features are **stub-first**: with no model running, every AI surface falls back
-to a deterministic, data-driven summary (the sidebar shows `LLM: ⚪ offline`). Start a
-local model (below) and the same buttons produce real generated prose (`LLM: 🟢 connected`).
+The AI features are **stub-first**: with no model running, every AI surface falls back to a
+deterministic, data-driven summary (sidebar shows `LLM: ⚪ offline`). Start a local model
+([below](#llm-configuration)) and the same buttons produce real generated prose
+(`LLM: 🟢 connected`).
+
+---
+
+## Federated ingestion demo
+
+Demonstrates the AURA architecture: a local **edge agent** pushes a project through an **API
+gateway** into the **central staging DB**, live. (The other 3 projects ship pre-loaded; only
+5G Core Rollout is ingested on demand.)
+
+**1. Start the gateway** in a second terminal (stdlib `http.server`, no extra deps):
+
+```powershell
+python src/gateway/main.py            # serves on http://localhost:8000
+```
+
+**2. In the app**, open **🛰️ Architecture**:
+- The gateway badge shows 🟢 online; 3 projects are **pre-loaded ✓**, 5G Core Rollout is **pending**.
+- Click **▶ Run 5G Core Rollout edge agent** → it posts the held-back project through the gateway
+  into the DB → the project (and its RED **RAN Packet Parser**) appears, **4 projects** now.
+- Click **↺ Reset demo** to hold it back again and repeat.
+
+You can also run the agent from the CLI: `python src/edge_agent.py proj_ran_5g`.
+
+---
+
+## Inference performance
+
+The **⚡ Performance** page benchmarks the AI core live. With Ollama running, click
+**▶ Run benchmark** to run 3 scenarios (org report · module deep-dive · agentic copilot Q&A)
+and see, per scenario: prompt/completion/total **tokens**, **end-to-end latency**, tokens/sec,
+and **peak GPU util + memory** during the run vs an **idle baseline**.
+
+GPU reads are **vendor-aware** — `nvidia-smi` locally, `rocm-smi` / `amd-smi` on an AMD/ROCm
+machine. The page degrades gracefully if no model or GPU tool is present.
 
 ---
 
@@ -125,81 +178,70 @@ local model (below) and the same buttons produce real generated prose (`LLM: �
 ```
 RepoInsight/
 ├── app.py                  # Streamlit entrypoint (Executive Overview)
-├── pages/                  # Streamlit views
-│   ├── 01_unit_head.py
-│   ├── 02_project_manager.py
-│   ├── 03_team_lead.py
-│   ├── 04_reports.py       # AI reports (scope + role selector, export)
-│   └── 05_copilot.py       # management copilot chat
+├── pages/                  # Streamlit views (01 unit head … 07 performance)
+│   ├── 01_unit_head.py     02_project_manager.py   03_team_lead.py
+│   ├── 04_reports.py       05_copilot.py
+│   ├── 06_architecture.py  # federated ingestion showcase
+│   └── 07_performance.py   # inference metrics (tokens / latency / GPU)
 ├── src/                    # core logic (importable modules)
-│   ├── config.py           # central DB path + pluggable LLM settings
+│   ├── config.py           # central DB path + pluggable LLM + GATEWAY_URL
 │   ├── database.py         # SQLite connection + query helpers
 │   ├── schema.sql          # all table + view DDL
-│   ├── generate_data.py    # seed the central engineering.db (run once)
-│   ├── analytics.py        # metric computation (health, trends, punctuality, ...)
-│   ├── risk_engine.py      # GREEN/AMBER/RED risk scoring per module
+│   ├── generate_data.py    # seed the central DB (run once; --full keeps all 4 projects)
+│   ├── analytics.py        # metrics: health, risk inputs, MTTR, AI efficiency, jira, telemetry
+│   ├── risk_engine.py      # low/medium/high risk scoring per module
 │   ├── llm_service.py      # pluggable LLM client + data-driven fallback
-│   ├── prompts/            # report.txt, copilot.txt
-│   └── ui.py               # risk colors, cached loaders, AI insight widget
-├── data/engineering.db     # generated SQLite database
-├── docs/
-│   ├── Engineering_Intelligence_Plan.md   # full design doc
-│   └── arch.md             # original architecture notes
+│   ├── agent.py            # tool-using copilot agent (live DB + read-only SQL)
+│   ├── repository.py       # ingestion write-seam (restore a project bundle)
+│   ├── edge_agent.py       # edge ingestion agent (reads source bundle, POSTs to gateway)
+│   ├── perf.py             # GPU / token / latency benchmark helpers
+│   ├── gateway/main.py     # stdlib ingestion gateway (POST /ingest/project, /healthz, /stats)
+│   ├── prompts/            # report.txt, copilot.txt, agent.txt
+│   └── ui.py               # risk colours, cached loaders, AI insight widget
+├── data/
+│   ├── engineering.db      # generated SQLite database (ships with 3 of 4 projects)
+│   └── sources/            # held-back project bundle for the live-ingestion demo
+├── docs/                   # design + architecture notes (AURA.md is the blueprint)
 ├── requirements.txt
 └── README.md
 ```
 
-> `app.py` and `pages/` stay at the project root because Streamlit requires the
-> entrypoint and its `pages/` directory to live together. They add `src/` to the
-> import path at startup, so the views can `import analytics`, `import ui`, etc.
+> `app.py` and `pages/` stay at the project root because Streamlit requires the entrypoint and
+> its `pages/` directory together. They add `src/` to the import path at startup.
 
 ---
 
-## LLM configuration (AI Reports + Copilot)
+## LLM configuration
 
 The LLM layer is **pluggable** via `config.py` and speaks the OpenAI-compatible
-`/v1/chat/completions` API, so the same code works against a small local model now and a
-larger model later. Configure with environment variables:
+`/v1/chat/completions` API, so the same code works against a small local model now and a larger
+model (vLLM / 70B) later. Configure with environment variables:
 
 | Variable | Default (local) | On the AMD/ROCm machine (vLLM) |
 |---|---|---|
 | `LLM_BASE_URL` | `http://localhost:11434/v1` (Ollama) | `http://localhost:8000/v1` |
 | `LLM_MODEL` | `qwen2.5:7b` | `Qwen/Qwen2.5-7B-Instruct` |
 | `LLM_API_KEY` | `not-needed-for-local` | — |
+| `GATEWAY_URL` | `http://localhost:8000` (ingestion gateway) | — |
 
-### Run a local model with Ollama — Linux
+### Run a local model with Ollama
 
 ```bash
-# 1. Install Ollama (official script)
+# Linux: install + start + pull
 curl -fsSL https://ollama.com/install.sh | sh
-
-# 2. Start the server (exposes the OpenAI-compatible API on :11434).
-#    The installer usually registers a systemd service that is already running —
-#    check with:  systemctl status ollama
-#    If it is not running, start it in its own terminal:
-ollama serve
-
-# 3. Pull the model (≈4.7 GB; matches the LLM_MODEL default)
-ollama pull qwen2.5:7b
-
-# 4. Verify the endpoint responds
-curl http://localhost:11434/v1/models
+ollama serve            # exposes the OpenAI-compatible API on :11434 (often already running)
+ollama pull qwen2.5:7b  # ≈4.7 GB; matches the LLM_MODEL default
+curl http://localhost:11434/v1/models   # verify
 ```
 
-> Lighter on RAM/VRAM? Use `ollama pull qwen2.5:3b` and set `LLM_MODEL=qwen2.5:3b`.
-> An NVIDIA/AMD GPU is used automatically when available; 7B needs ~6 GB of VRAM.
-
-### Run a local model with Ollama — Windows
-
 ```powershell
-# install Ollama from https://ollama.com (or: winget install Ollama.Ollama), then:
+# Windows: install from https://ollama.com (or: winget install Ollama.Ollama), then:
 ollama pull qwen2.5:7b
 ollama serve            # often already running as a background service
 ```
 
-If no model is running, every AI surface falls back to a deterministic data-driven
-summary (the sidebar shows `LLM: ⚪ offline`); start Ollama and it switches to
-`LLM: 🟢 connected`.
+> Lighter on VRAM? `ollama pull qwen2.5:3b` and set `LLM_MODEL=qwen2.5:3b`. A GPU is used
+> automatically when available; 7B needs ~6 GB of VRAM.
 
 ---
 
@@ -207,17 +249,22 @@ summary (the sidebar shows `LLM: ⚪ offline`); start Ollama and it switches to
 
 | Problem | Fix |
 |---|---|
-| `streamlit: command not found` | Use `python -m streamlit run app.py` (the script dir may not be on PATH). |
+| `streamlit: command not found` | Use `python -m streamlit run app.py`. |
 | Dashboard says "No database found" | Run `python src/generate_data.py` first. |
+| Architecture page: gateway 🔴 offline | Start it: `python src/gateway/main.py`. |
+| Only 3 projects / 5G Core missing | Intended — ingest it on the Architecture page, or seed with `--full`. |
 | PowerShell won't activate the venv | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or use `.\.venv\Scripts\python.exe` directly. |
 | Port 8501 already in use | `python -m streamlit run app.py --server.port 8502`. |
+| Performance page: model 🔴 offline | Start Ollama + the model (see above). |
 
 ---
 
 ## Resetting
 
 ```powershell
-python src/generate_data.py     # re-seed the database from scratch
+python src/generate_data.py            # re-seed (3 projects + held-back 5G Core)
+python src/generate_data.py --full     # re-seed with all 4 projects in the DB
 ```
 
-The generator drops and recreates all tables on each run, so it is safe to re-run any time.
+The generator deletes and recreates the DB on each run, so it is safe to re-run any time.
+> Stop Streamlit before re-seeding (on Windows an open connection can lock the DB file).

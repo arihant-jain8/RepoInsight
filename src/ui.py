@@ -8,8 +8,8 @@ import analytics
 import config
 import llm_service
 
-RISK_COLORS = {"GREEN": "#2ecc71", "AMBER": "#f39c12", "RED": "#e74c3c"}
-RISK_EMOJI = {"GREEN": "🟢", "AMBER": "🟠", "RED": "🔴"}
+RISK_COLORS = {"low": "#2ecc71", "medium": "#f39c12", "high": "#e74c3c"}
+RISK_EMOJI = {"low": "🟢", "medium": "🟠", "high": "🔴"}
 
 
 def require_db() -> None:

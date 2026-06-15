@@ -3,4 +3,8 @@ plotly==6.8.0
 pandas==3.0.3
 httpx==0.28.1
 faker==40.22.0
-# when real git ingestion lands: GitPython, requests
+
+# Phase 2 ingestion showcase (API_GATEWAY_DECISION): the gateway uses the Python
+# stdlib (http.server) — no FastAPI/uvicorn, which would pin starlette<0.42 and
+# clash with Streamlit 1.58. The edge agent posts via httpx (already above).
+# when real git ingestion lands: GitPython

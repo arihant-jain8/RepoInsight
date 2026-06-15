@@ -26,3 +26,8 @@ LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "800"))
 # To run on the AMD/ROCm machine with vLLM, set:
 #   LLM_BASE_URL=http://localhost:8000/v1
 #   LLM_MODEL=Qwen/Qwen2.5-7B-Instruct
+
+# --- Ingestion gateway (API_GATEWAY_DECISION showcase) --------------------
+# The edge agent posts the held-back project bundle here; the gateway writes it
+# into the central DB. Run:  python src/gateway/main.py  (stdlib http.server)
+GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")

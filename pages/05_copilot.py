@@ -27,9 +27,9 @@ st.caption("A tool-using agent: it queries the live database to answer, and show
 
 EXAMPLES = [
     "Which module should I focus on this week and why?",
-    "How many high/critical customer issues does each RED module have?",
-    "Which commit caused Acme Corp's worst issue?",
-    "Does reviewer overload line up with customer bugs in Auth?",
+    "How many high/critical customer issues does each high-risk module have?",
+    "Which commit caused AT&T's worst issue?",
+    "Does reviewer overload line up with customer bugs in RAN Packet Parser?",
 ]
 st.caption("Try: " + " · ".join(f"“{e}”" for e in EXAMPLES))
 

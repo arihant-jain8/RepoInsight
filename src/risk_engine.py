@@ -61,7 +61,7 @@ def compute_module_risk(m: dict) -> dict:
     collab_risk = min(latency_norm * 0.6 + m["unreviewed_pct"] * 0.4, 100)
 
     risk_score = 0.50 * qrisk + 0.30 * delivery_risk + 0.20 * collab_risk
-    level = "GREEN" if risk_score < 30 else "AMBER" if risk_score < 60 else "RED"
+    level = "low" if risk_score < 30 else "medium" if risk_score < 60 else "high"
 
     return {
         "score": round(risk_score, 1),

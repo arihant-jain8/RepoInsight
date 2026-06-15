@@ -70,6 +70,24 @@ ui.render_ai_insight(
 
 st.divider()
 
+# --- Task overview (AURA.md Team Lead "Task Overview Table") --------------
+st.subheader("Task overview")
+st.caption("Jira tasks for this module — assignee, lifecycle stage, completion.")
+tasks = database.query_df(
+    "SELECT ticket_id, task_name, assigned_to, severity, status, "
+    "lifecycle_status, raised_time, completed_date, commit_id "
+    "FROM jira_logs WHERE module_id=? "
+    "ORDER BY CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 "
+    "WHEN 'medium' THEN 2 ELSE 1 END DESC, raised_time DESC",
+    (module_id,),
+)
+if tasks.empty:
+    st.info("No tasks logged for this module. 🎉")
+else:
+    st.dataframe(tasks, width="stretch", hide_index=True)
+
+st.divider()
+
 # --- Type-specific quality metrics ---------------------------------------
 st.subheader(f"Quality metrics — {health['type']}")
 qrows = []
@@ -111,6 +129,17 @@ if not mdf.empty:
     fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
     fig.update_layout(showlegend=False, height=420)
     st.plotly_chart(fig, width="stretch")
+
+st.divider()
+
+# --- Live telemetry (AURA.md performance_data) ---------------------------
+st.subheader("Live telemetry")
+st.caption("Real-time infrastructure readings for this module.")
+tel = analytics.get_telemetry(module_id)
+if tel:
+    st.dataframe(pd.DataFrame(tel), width="stretch", hide_index=True)
+else:
+    st.caption("No telemetry samples for this module.")
 
 st.divider()
 
@@ -175,10 +204,9 @@ st.divider()
 # --- Commits behind this module's customer issues ------------------------
 st.subheader("Commits behind customer issues")
 issue_df = database.query_df(
-    "SELECT cu.name AS customer, ci.severity, ci.error_info, ci.commit_id, "
+    "SELECT ci.customer AS customer, ci.severity, ci.error_info, ci.commit_id, "
     "a.name AS author, ci.report_time, ci.resolve_time "
     "FROM customer_issues ci "
-    "JOIN customers cu ON cu.id=ci.customer_id "
     "LEFT JOIN commits c ON c.commit_id=ci.commit_id "
     "LEFT JOIN engineers a ON a.id=c.author_id "
     "WHERE ci.module_id=? ORDER BY ci.severity DESC",

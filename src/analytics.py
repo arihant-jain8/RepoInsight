@@ -44,10 +44,13 @@ def get_module_health(module_id: int, weeks: int = 4) -> dict:
     ph = _placeholders(wks)
 
     meta = database.query(
-        "SELECT m.id, m.name, m.type, m.team_size, e.name AS team_lead, "
-        "p.id AS project_id, p.name AS project, u.id AS unit_id, u.name AS unit "
+        "SELECT m.id, m.name, m.type, m.team_size, m.issue_status, "
+        "e.name AS team_lead, p.id AS project_id, p.name AS project, "
+        "p.customer AS customer, a.id AS account_id, a.name AS account, "
+        "vu.id AS unit_id, vu.name AS unit "
         "FROM modules m JOIN projects p ON p.id = m.project_id "
-        "JOIN units u ON u.id = p.unit_id "
+        "JOIN accounts a ON a.id = p.account_id "
+        "JOIN vertical_units vu ON vu.id = a.vertical_id "
         "LEFT JOIN engineers e ON e.id = m.team_lead_id WHERE m.id = ?",
         (module_id,),
     )[0]
@@ -116,7 +119,10 @@ def get_module_health(module_id: int, weeks: int = 4) -> dict:
         "module_id": meta["id"], "name": meta["name"], "type": meta["type"],
         "team_lead": meta["team_lead"], "team_size": meta["team_size"],
         "project_id": meta["project_id"], "project": meta["project"],
+        "customer": meta["customer"],
+        "account_id": meta["account_id"], "account": meta["account"],
         "unit_id": meta["unit_id"], "unit": meta["unit"],
+        "issue_status": meta["issue_status"],
         "window_weeks": len(wks), "commits": agg["commits"],
         "build_success_rate": agg["build_success_rate"] or 0.0,
         "integration_fail_pct": agg["integration_fail_pct"] or 0.0,
@@ -155,6 +161,7 @@ def get_commit_comments(module_id: int) -> list[dict]:
     """Per-commit comment counts by severity (major/minor), for a module."""
     return database.query(
         "SELECT c.commit_id, c.pr_id, c.week, e.name AS author, "
+        "c.ai_agent_used, ROUND(c.ai_generated_percentage, 1) AS ai_generated_pct, "
         "SUM(CASE WHEN rc.severity = 'major' THEN 1 ELSE 0 END) AS major, "
         "SUM(CASE WHEN rc.severity = 'minor' THEN 1 ELSE 0 END) AS minor, "
         "COUNT(rc.id) AS total "
@@ -192,6 +199,7 @@ def get_all_module_rankings(weeks: int = 4) -> list[dict]:
         rows.append({
             "module_id": health["module_id"], "module": health["name"],
             "type": health["type"], "project": health["project"],
+            "account_id": health["account_id"], "account": health["account"],
             "unit": health["unit"], "team_size": health["team_size"],
             "risk_score": risk["score"], "risk_level": risk["level"],
             "build_success_rate": health["build_success_rate"],
@@ -222,7 +230,7 @@ def get_type_benchmark(module_id: int, weeks: int = 4) -> dict:
 def get_org_summary(weeks: int = 4) -> dict:
     """High-level org health for KPI cards and the copilot context."""
     rankings = get_all_module_rankings(weeks)
-    levels = {"GREEN": 0, "AMBER": 0, "RED": 0}
+    levels = {"low": 0, "medium": 0, "high": 0}
     for r in rankings:
         levels[r["risk_level"]] += 1
 
@@ -241,8 +249,8 @@ def get_org_summary(weeks: int = 4) -> dict:
         "SELECT COUNT(*) AS n FROM customer_issues")[0]["n"]
 
     return {
-        "modules": len(rankings), "healthy": levels["GREEN"],
-        "warning": levels["AMBER"], "critical": levels["RED"],
+        "modules": len(rankings), "healthy": levels["low"],
+        "warning": levels["medium"], "critical": levels["high"],
         "avg_build_success": avg_build,
         "highest_risk": rankings[0] if rankings else None,
         "fastest_improving": improving[0] if improving else None,
@@ -267,11 +275,11 @@ def get_customer_impact(project_id: int | None = None) -> list[dict]:
     where = "WHERE ci.project_id = ?" if project_id is not None else ""
     params = (project_id,) if project_id is not None else ()
     return database.query(
-        "SELECT cu.name AS customer, COUNT(*) AS issues, "
+        "SELECT ci.customer AS customer, COUNT(*) AS issues, "
         "SUM(CASE WHEN ci.severity IN ('high','critical') THEN 1 ELSE 0 END) "
         "    AS high_critical "
-        "FROM customer_issues ci JOIN customers cu ON cu.id = ci.customer_id "
-        f"{where} GROUP BY cu.id ORDER BY issues DESC", params)
+        "FROM customer_issues ci "
+        f"{where} GROUP BY ci.customer ORDER BY issues DESC", params)
 
 
 def get_customer_trace(project_id: int | None = None) -> list[dict]:
@@ -288,17 +296,151 @@ def get_customer_trace(project_id: int | None = None) -> list[dict]:
 
 def list_projects() -> list[dict]:
     return database.query(
-        "SELECT p.id, p.name, p.manager, u.name AS unit "
-        "FROM projects p JOIN units u ON u.id = p.unit_id ORDER BY u.name, p.name"
+        "SELECT p.id, p.name, p.manager, p.customer, a.name AS account, "
+        "vu.name AS unit "
+        "FROM projects p JOIN accounts a ON a.id = p.account_id "
+        "JOIN vertical_units vu ON vu.id = a.vertical_id "
+        "ORDER BY vu.name, p.name"
     )
 
 
 def list_modules() -> list[dict]:
     return database.query(
         "SELECT m.id, m.name, m.type, e.name AS team_lead, "
-        "p.name AS project, u.name AS unit "
+        "p.name AS project, a.name AS account, vu.name AS unit "
         "FROM modules m JOIN projects p ON p.id = m.project_id "
-        "JOIN units u ON u.id = p.unit_id "
+        "JOIN accounts a ON a.id = p.account_id "
+        "JOIN vertical_units vu ON vu.id = a.vertical_id "
         "LEFT JOIN engineers e ON e.id = m.team_lead_id "
-        "ORDER BY u.name, p.name, m.name"
+        "ORDER BY vu.name, p.name, m.name"
+    )
+
+
+# -------------------------------------------------------------------------
+# Phase 4 rollups: MTTR, AI efficiency, Jira pipeline, telemetry
+# -------------------------------------------------------------------------
+def get_mttr_by_module() -> list[dict]:
+    """Mean time to resolution (days) per module, from resolved jira tickets."""
+    return database.query(
+        "SELECT m.id AS module_id, m.name AS module, COUNT(*) AS resolved_tickets, "
+        "ROUND(AVG(julianday(j.resolve_time) - julianday(j.raised_time)), 1) AS mttr_days "
+        "FROM jira_logs j JOIN modules m ON m.id = j.module_id "
+        "WHERE j.resolve_time IS NOT NULL "
+        "GROUP BY m.id ORDER BY mttr_days DESC"
+    )
+
+
+def get_mttr_by_account() -> list[dict]:
+    """Mean time to resolution (days) per account, from resolved jira tickets."""
+    return database.query(
+        "SELECT a.id AS account_id, a.name AS account, COUNT(*) AS resolved_tickets, "
+        "ROUND(AVG(julianday(j.resolve_time) - julianday(j.raised_time)), 1) AS mttr_days "
+        "FROM jira_logs j "
+        "JOIN modules m ON m.id = j.module_id "
+        "JOIN projects p ON p.id = m.project_id "
+        "JOIN accounts a ON a.id = p.account_id "
+        "WHERE j.resolve_time IS NOT NULL "
+        "GROUP BY a.id ORDER BY mttr_days DESC"
+    )
+
+
+def get_account_risk_tiers(weeks: int = 4) -> dict:
+    """Derive each account's risk tier from its modules' computed risk:
+    high if any module is high, else medium if any medium, else low. Returns
+    {account_id: {tier, critical_modules, n_critical, n_amber}}."""
+    by_acct = {}
+    for r in get_all_module_rankings(weeks):
+        a = by_acct.setdefault(r["account_id"],
+                               {"critical_modules": [], "n_critical": 0, "n_amber": 0})
+        if r["risk_level"] == "high":
+            a["critical_modules"].append(r["module"])
+            a["n_critical"] += 1
+        elif r["risk_level"] == "medium":
+            a["n_amber"] += 1
+    for a in by_acct.values():
+        a["tier"] = ("high" if a["n_critical"] else
+                     "medium" if a["n_amber"] else "low")
+    return by_acct
+
+
+def get_account_ai_efficiency() -> list[dict]:
+    """Per-account AI tooling efficiency (ai_tool_efficiency) + computed MTTR +
+    a data-derived account risk tier (from its modules' risk)."""
+    rows = database.query(
+        "SELECT a.id AS account_id, a.name AS account, vu.name AS unit, "
+        "e.manual_triage_hours_saved, e.mttr_reduction_percentage, "
+        "e.ai_resolved_tickets_count "
+        "FROM ai_tool_efficiency e JOIN accounts a ON a.id = e.account_id "
+        "JOIN vertical_units vu ON vu.id = a.vertical_id ORDER BY a.name"
+    )
+    mttr = {m["account_id"]: m["mttr_days"] for m in get_mttr_by_account()}
+    tiers = get_account_risk_tiers()
+    for r in rows:
+        r["mttr_days"] = mttr.get(r["account_id"], 0.0)
+        t = tiers.get(r["account_id"], {})
+        r["risk_tier"] = t.get("tier", "low")
+        r["critical_modules"] = t.get("critical_modules", [])
+        r["n_critical"] = t.get("n_critical", 0)
+    return rows
+
+
+# Severity ordering for jira tickets (string severity -> rank).
+_SEV_RANK = ("CASE j.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 "
+             "WHEN 'medium' THEN 2 ELSE 1 END")
+
+
+def get_jira_pipeline(project_id: int | None = None) -> list[dict]:
+    """Jira ticket pipeline (PM/TL view): one row per ticket, severity-ordered."""
+    where = "WHERE m.project_id = ?" if project_id is not None else ""
+    params = (project_id,) if project_id is not None else ()
+    return database.query(
+        "SELECT j.ticket_id, m.name AS module, p.name AS project, p.customer, "
+        "j.severity, j.status, j.raised_time, j.resolve_time, j.assigned_to, "
+        "j.task_name, j.lifecycle_status, j.automation_percentage, j.commit_id "
+        "FROM jira_logs j "
+        "JOIN modules m ON m.id = j.module_id "
+        "JOIN projects p ON p.id = m.project_id "
+        f"{where} ORDER BY {_SEV_RANK} DESC, j.raised_time DESC", params
+    )
+
+
+def get_project_delivery_kpis(project_id: int) -> dict:
+    """Delivery snapshot for a project: ticket volume/backlog, MTTR, AI assistance."""
+    return database.query(
+        "SELECT COUNT(*) AS total, "
+        "SUM(CASE WHEN j.resolve_time IS NULL THEN 1 ELSE 0 END) AS open_count, "
+        "SUM(CASE WHEN j.resolve_time IS NULL AND j.severity IN ('high','critical') "
+        "         THEN 1 ELSE 0 END) AS high_crit_open, "
+        "ROUND(AVG(CASE WHEN j.resolve_time IS NOT NULL "
+        "          THEN julianday(j.resolve_time) - julianday(j.raised_time) END), 1) "
+        "    AS mttr_days, "
+        "ROUND(AVG(j.automation_percentage), 1) AS ai_assisted_pct "
+        "FROM jira_logs j JOIN modules m ON m.id = j.module_id "
+        "WHERE m.project_id = ?", (project_id,)
+    )[0]
+
+
+def get_telemetry(module_id: int) -> list[dict]:
+    """Telemetry samples for a module (most recent first)."""
+    return database.query(
+        "SELECT metric_source, timestamp, issue_status, packet_drop_rate, "
+        "latency_ms, cpu_utilization_percentage, associated_incidents "
+        "FROM performance_data WHERE module_id = ? ORDER BY timestamp DESC",
+        (module_id,)
+    )
+
+
+def get_customer_issue_status() -> list[dict]:
+    """Per customer × severity: tickets raised vs still open (unresolved). A ticket
+    is 'open' if it has no resolve_time. Customer = project.customer."""
+    return database.query(
+        "SELECT vu.name AS unit, p.customer AS customer, j.severity AS severity, "
+        "COUNT(*) AS raised, "
+        "SUM(CASE WHEN j.resolve_time IS NULL THEN 1 ELSE 0 END) AS open_count "
+        "FROM jira_logs j "
+        "JOIN modules m ON m.id = j.module_id "
+        "JOIN projects p ON p.id = m.project_id "
+        "JOIN accounts a ON a.id = p.account_id "
+        "JOIN vertical_units vu ON vu.id = a.vertical_id "
+        "GROUP BY vu.name, p.customer, j.severity ORDER BY p.customer, j.severity"
     )
