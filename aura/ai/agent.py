@@ -23,6 +23,11 @@ from aura.ai import llm_service
 MAX_STEPS = 6
 _MAX_ROWS = 30  # cap rows fed back to the model per tool result
 
+# Tools whose data maps to a make_chart dataset — used to decide if a proactive
+# chart is worthwhile (weak local models won't volunteer one, so we nudge once).
+_CHARTABLE_TOOLS = {"get_module_rankings", "get_customer_impact", "get_mttr",
+                    "get_ai_efficiency", "get_jira_pipeline"}
+
 
 # -------------------------------------------------------------------------
 # Name resolution
@@ -401,6 +406,7 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
 
     trace = []
     nudged = False
+    chart_nudged = False
     total_tokens = calls = 0
     chart = None
     for _ in range(MAX_STEPS):
@@ -427,6 +433,18 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
                                  "trends, those are DATA — call the right tool to verify "
                                  "them, then answer. If your answer is only about the "
                                  "database structure/schema, you may keep it as-is."})
+                continue
+            # Proactive chart: if the answer drew on chartable data but no chart was
+            # made, nudge once to add one (small models won't volunteer it).
+            if (chart is None and not chart_nudged
+                    and any(t["tool"] in _CHARTABLE_TOOLS for t in trace)):
+                chart_nudged = True
+                messages.append({"role": "assistant", "content": msg.get("content") or ""})
+                messages.append({"role": "user", "content":
+                                 "If your answer compares, ranks, or shows a distribution "
+                                 "or trend across modules, accounts, or customers, call "
+                                 "make_chart now to add a chart that supports it. If it is "
+                                 "just a single fact, repeat your answer unchanged."})
                 continue
             return {"text": _scrub_sql(msg.get("content") or "") or "(no answer)",
                     "source": "llm", "trace": trace,
