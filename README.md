@@ -14,61 +14,92 @@ The demo runs on **static, synthetic, git-shaped data** so the whole system work
 with no external services. The current dataset: **2 verticals (Telecomm, BFSI) → 2 accounts
 → 4 projects → 12 modules**.
 
+> **This deployment targets the AMD/ROCm machine running a 70B-class model** — Qwen2.5 **72B**
+> served by Ollama. The LLM layer is pluggable, so a smaller model still works for low-VRAM dev
+> (see [Using a smaller model](#using-a-smaller-model)). Commands below are for **Linux** (the
+> AMD box); Windows/macOS notes are inline where they differ.
+
 ---
 
 ## Prerequisites
 
-- **Python 3.12+**
-- **git**
-- Windows, macOS, or Linux. Commands below show **Windows PowerShell**; equivalents are noted.
-- *(Optional, for real AI output)* **Ollama** + a local model — see [LLM configuration](#llm-configuration).
-- *(Optional, for the Performance page GPU metrics)* an NVIDIA GPU (`nvidia-smi`) or AMD/ROCm
-  GPU (`rocm-smi` / `amd-smi`).
+- **Python 3.12+** and **git**
+- An **AMD GPU with ROCm** (Linux). The 70B-class model needs **~48 GB of VRAM** (Qwen2.5 72B,
+  4-bit). GPU metrics on the Performance page use `rocm-smi` / `amd-smi`.
+- **Ollama** — serves the OpenAI-compatible `/v1/chat/completions` API the app speaks, with
+  ROCm acceleration on AMD.
 
 ---
 
 ## Setup
 
-From the project root (`RepoInsight/`):
+Run these in order, from a shell on the AMD machine.
 
-### 1. Create and activate a virtual environment
+### 1. Get the code
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1          # PowerShell
+```bash
+git clone <repo-url> RepoInsight
+cd RepoInsight
+```
+
+### 2. Create and activate a virtual environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
 <details>
-<summary>Other shells</summary>
+<summary>Windows / macOS</summary>
 
-```bash
-# macOS / Linux
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Windows cmd.exe
+```powershell
+# Windows PowerShell
 python -m venv .venv
-.\.venv\Scripts\activate.bat
+.\.venv\Scripts\Activate.ps1
+# If activation is blocked: Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+```bash
+# macOS
+python3 -m venv .venv && source .venv/bin/activate
 ```
 </details>
 
-> If PowerShell blocks the activation script, run once:
-> `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`
-> Or skip activation and prefix commands with `.\.venv\Scripts\python.exe`.
+### 3. Install dependencies
 
-### 2. Install dependencies
-
-```powershell
+```bash
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-### 3. Generate the synthetic database
+### 4. Start the 70B model (Ollama on ROCm)
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama serve                 # OpenAI-compatible API on :11434; uses the AMD GPU via ROCm
+ollama pull qwen2.5:72b      # ~47 GB — the 70B-class model
+curl http://localhost:11434/v1/models    # verify it's serving
+```
+
+Point the app at the 70B model (the only var that differs from the local default):
+
+```bash
+export LLM_MODEL=qwen2.5:72b
+# LLM_BASE_URL already defaults to http://localhost:11434/v1 (Ollama)
+# 70B is slower than 7B — if requests time out, raise the per-request timeout:
+export LLM_TIMEOUT=240
+```
+
+> The app is **stub-first**: with no model running, every AI surface falls back to a
+> deterministic, data-driven summary (sidebar shows `LLM: ⚪ offline`). With Ollama up and the
+> model pulled, the same buttons produce real generated prose (`LLM: 🟢 connected`).
+> Full env-var reference: [LLM configuration](#llm-configuration).
+
+### 5. Generate the synthetic database
 
 This seeds the central `data/engineering.db` (12 modules × 12 weeks of commits, type-aware
 quality metrics, review comments, Jira tickets, and telemetry).
 
-```powershell
+```bash
 python -m aura.data.generate_data
 ```
 
@@ -82,25 +113,25 @@ Seeded central engineering.db:
   review_comments : ~2900
   jira_logs       : 127
   performance_data: 72
-  held back       : proj_ran_5g -> data\sources\proj_ran_5g.json (3 modules, 288 commits) - ingest live via the agent
+  held back       : proj_ran_5g -> data/sources/proj_ran_5g.json (3 modules, 288 commits) - ingest live via the agent
 ```
 
-> **Note — one project is held back for the live-ingestion demo.** The seeder lifts
-> **5G Core Rollout** out of the central DB into `data/sources/proj_ran_5g.json`, so the app
-> ships with **3 of 4 projects**. You ingest the 4th live on the **🛰️ Architecture** page (see
-> [Federated ingestion demo](#federated-ingestion-demo)). To keep all 4 projects in the DB:
-> `python -m aura.data.generate_data --full`.
-
+> **One project is held back for the live-ingestion demo.** The seeder lifts **5G Core Rollout**
+> out of the central DB into `data/sources/proj_ran_5g.json`, so the app ships with **3 of 4
+> projects**. You ingest the 4th live on the **🛰️ Architecture** page (see
+> [Federated ingestion demo](#federated-ingestion-demo)). To keep all 4 projects in the DB
+> instead: `python -m aura.data.generate_data --full`.
+>
 > A pre-generated `data/engineering.db` is committed, so this step is optional — re-run it any
 > time to reset the data.
 
-### 4. Run the dashboard
+### 6. Run the dashboard
 
-```powershell
+```bash
 python -m streamlit run app.py
 ```
 
-Then open **http://localhost:8501**. (Streamlit usually opens it for you.)
+Then open **http://localhost:8501** (Streamlit usually opens it for you).
 
 ---
 
@@ -130,13 +161,6 @@ scored on that type's own metrics via `metric_catalog` + `commit_metrics`:
 Risk is `0.50·quality + 0.30·delivery + 0.20·collaboration`, banded into **low (<30) /
 medium (30–59) / high (≥60)**. Modules are benchmarked against **same-type** peers.
 
-### AI behaviour (works with or without a model)
-
-The AI features are **stub-first**: with no model running, every AI surface falls back to a
-deterministic, data-driven summary (sidebar shows `LLM: ⚪ offline`). Start a local model
-([below](#llm-configuration)) and the same buttons produce real generated prose
-(`LLM: 🟢 connected`).
-
 ---
 
 ## Federated ingestion demo
@@ -147,14 +171,14 @@ gateway** into the **central staging DB**, live. (The other 3 projects ship pre-
 
 **1. Start the gateway** in a second terminal (stdlib `http.server`, no extra deps):
 
-```powershell
+```bash
 python -m aura.ingestion.gateway            # serves on http://localhost:8000
 ```
 
 **2. In the app**, open **🛰️ Architecture**:
 - The gateway badge shows 🟢 online; 3 projects are **pre-loaded ✓**, 5G Core Rollout is **pending**.
 - Click **▶ Run 5G Core Rollout edge agent** → it posts the held-back project through the gateway
-  into the DB → the project (and its RED **RAN Packet Parser**) appears, **4 projects** now.
+  into the DB → the project (and its high-risk **RAN Packet Parser** module) appears, **4 projects** now.
 - Click **↺ Reset demo** to hold it back again and repeat.
 
 You can also run the agent from the CLI: `python -m aura.ingestion.edge_agent proj_ran_5g`.
@@ -163,13 +187,79 @@ You can also run the agent from the CLI: `python -m aura.ingestion.edge_agent pr
 
 ## Inference performance
 
-The **⚡ Performance** page benchmarks the AI core live. With Ollama running, click
+The **⚡ Performance** page benchmarks the AI core live. With the model running, click
 **▶ Run benchmark** to run 3 scenarios (org report · module deep-dive · agentic copilot Q&A)
 and see, per scenario: prompt/completion/total **tokens**, **end-to-end latency**, tokens/sec,
 and **peak GPU util + memory** during the run vs an **idle baseline**.
 
-GPU reads are **vendor-aware** — `nvidia-smi` locally, `rocm-smi` / `amd-smi` on an AMD/ROCm
-machine. The page degrades gracefully if no model or GPU tool is present.
+GPU reads are **vendor-aware** — on this AMD box it uses `rocm-smi` / `amd-smi` (and `nvidia-smi`
+on an NVIDIA dev machine). The page degrades gracefully if no model or GPU tool is present.
+
+---
+
+## Resetting
+
+```bash
+python -m aura.data.generate_data            # re-seed (3 projects + held-back 5G Core)
+python -m aura.data.generate_data --full     # re-seed with all 4 projects in the DB
+```
+
+The generator deletes and recreates the DB on each run, so it is safe to re-run any time.
+> Stop Streamlit before re-seeding (an open connection can lock the DB file).
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `streamlit: command not found` | Use `python -m streamlit run app.py`. |
+| Dashboard says "No database found" | Run `python -m aura.data.generate_data` first. |
+| Copilot / reports say `LLM: ⚪ offline` | Start Ollama (`ollama serve`) and confirm `LLM_MODEL` is pulled (`ollama list`). |
+| Copilot requests time out | 70B is slow on first load — raise `LLM_TIMEOUT` (e.g. `export LLM_TIMEOUT=240`). |
+| Performance page: GPU metrics blank | Ensure `rocm-smi` / `amd-smi` is on `PATH` (ships with ROCm). |
+| Architecture page: gateway 🔴 offline | Start it: `python -m aura.ingestion.gateway`. |
+| Only 3 projects / 5G Core missing | Intended — ingest it on the Architecture page, or seed with `--full`. |
+| Port 8501 already in use | `python -m streamlit run app.py --server.port 8502`. |
+
+---
+
+## LLM configuration
+
+The LLM layer is **pluggable** via `config.py` and speaks the OpenAI-compatible
+`/v1/chat/completions` API, so the same code runs against Ollama on the AMD box and (if you
+prefer) a vLLM server, with no code changes. Configure with environment variables:
+
+| Variable | Default | This (AMD / 70B) deployment |
+|---|---|---|
+| `LLM_BASE_URL` | `http://localhost:11434/v1` (Ollama) | same — Ollama on the AMD box |
+| `LLM_MODEL` | `qwen2.5:7b` | **`qwen2.5:72b`** |
+| `LLM_API_KEY` | `not-needed-for-local` | — |
+| `LLM_TIMEOUT` | `120` (seconds/request) | `240` (70B is slower) |
+| `LLM_MAX_TOKENS` | `800` | `800` |
+| `GATEWAY_URL` | `http://localhost:8000` (ingestion gateway) | same |
+
+<details>
+<summary>Run the 70B model via vLLM instead of Ollama</summary>
+
+```bash
+vllm serve Qwen/Qwen2.5-72B-Instruct --port 8000        # OpenAI-compatible on :8000
+export LLM_BASE_URL=http://localhost:8000/v1
+export LLM_MODEL=Qwen/Qwen2.5-72B-Instruct
+```
+</details>
+
+### Using a smaller model
+
+For a low-VRAM dev machine, the defaults already point at a small model — just pull it and
+leave `LLM_MODEL` unset:
+
+```bash
+ollama pull qwen2.5:7b      # ≈4.7 GB, needs ~6 GB VRAM  (or qwen2.5:3b for less)
+```
+
+The copilot's tool-use and proactive charting are **noticeably more reliable on the 70B** than
+on a 7B; smaller models are best for offline/stub development.
 
 ---
 
@@ -201,63 +291,3 @@ RepoInsight/
 > its `pages/` directory together. They add the repo root to the import path so they can
 > `from aura.* import …`. Run the CLI tools as modules from the root, e.g.
 > `python -m aura.data.generate_data` and `python -m aura.ingestion.gateway`.
-
----
-
-## LLM configuration
-
-The LLM layer is **pluggable** via `config.py` and speaks the OpenAI-compatible
-`/v1/chat/completions` API, so the same code works against a small local model now and a larger
-model (vLLM / 70B) later. Configure with environment variables:
-
-| Variable | Default (local) | On the AMD/ROCm machine (vLLM) |
-|---|---|---|
-| `LLM_BASE_URL` | `http://localhost:11434/v1` (Ollama) | `http://localhost:8000/v1` |
-| `LLM_MODEL` | `qwen2.5:7b` | `Qwen/Qwen2.5-7B-Instruct` |
-| `LLM_API_KEY` | `not-needed-for-local` | — |
-| `GATEWAY_URL` | `http://localhost:8000` (ingestion gateway) | — |
-
-### Run a local model with Ollama
-
-```bash
-# Linux: install + start + pull
-curl -fsSL https://ollama.com/install.sh | sh
-ollama serve            # exposes the OpenAI-compatible API on :11434 (often already running)
-ollama pull qwen2.5:7b  # ≈4.7 GB; matches the LLM_MODEL default
-curl http://localhost:11434/v1/models   # verify
-```
-
-```powershell
-# Windows: install from https://ollama.com (or: winget install Ollama.Ollama), then:
-ollama pull qwen2.5:7b
-ollama serve            # often already running as a background service
-```
-
-> Lighter on VRAM? `ollama pull qwen2.5:3b` and set `LLM_MODEL=qwen2.5:3b`. A GPU is used
-> automatically when available; 7B needs ~6 GB of VRAM.
-
----
-
-## Troubleshooting
-
-| Problem | Fix |
-|---|---|
-| `streamlit: command not found` | Use `python -m streamlit run app.py`. |
-| Dashboard says "No database found" | Run `python -m aura.data.generate_data` first. |
-| Architecture page: gateway 🔴 offline | Start it: `python -m aura.ingestion.gateway`. |
-| Only 3 projects / 5G Core missing | Intended — ingest it on the Architecture page, or seed with `--full`. |
-| PowerShell won't activate the venv | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, or use `.\.venv\Scripts\python.exe` directly. |
-| Port 8501 already in use | `python -m streamlit run app.py --server.port 8502`. |
-| Performance page: model 🔴 offline | Start Ollama + the model (see above). |
-
----
-
-## Resetting
-
-```powershell
-python -m aura.data.generate_data            # re-seed (3 projects + held-back 5G Core)
-python -m aura.data.generate_data --full     # re-seed with all 4 projects in the DB
-```
-
-The generator deletes and recreates the DB on each run, so it is safe to re-run any time.
-> Stop Streamlit before re-seeding (on Windows an open connection can lock the DB file).
