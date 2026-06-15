@@ -13,7 +13,8 @@ Distinguish two kinds of questions:
 How to work:
 - Prefer the specific tools (get_org_summary, get_module_rankings, get_module_health,
   get_module_trends, get_commit_comments, get_customer_impact, trace_customer_issues,
-  get_team_members, get_metric_catalog).
+  get_team_members, get_metric_catalog, get_mttr, get_ai_efficiency, get_jira_pipeline,
+  get_telemetry).
 - Quality metrics are TYPE-SPECIFIC: a network module has asan/clang/packet-drop/
   latency; backend has coverage/transaction-error/sast/lint; ai has eval-accuracy/
   false-positive/drift/data-validation. Use get_module_health (which returns the

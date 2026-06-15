@@ -42,8 +42,8 @@ insights — all served from a **static, pre-seeded database**.
 - [Phase 1 — Data model](#phase-1--data-model) ✅ done
 - [Phase 2 — Ingestion architecture showcase](#phase-2--ingestion-architecture-showcase) ✅ done
 - [Phase 3 — ~~Live data generator~~ (dropped)](#phase-3--live-data-generator-dropped)
-- [Phase 4 — Analytics rollups](#phase-4--analytics-rollups)
-- [Phase 5 — Persona dashboards + view scoping](#phase-5--persona-dashboards--view-scoping)
+- [Phase 4 — Analytics rollups](#phase-4--analytics-rollups) ✅ done
+- [Phase 5 — Persona dashboards + view scoping](#phase-5--persona-dashboards--view-scoping) ✅ done
 - [Phase 6 — AI core](#phase-6--ai-core)
 - [Phase 7 — Storage migration](#phase-7--storage-migration-sqlite--mongodb)
 - [Execution order](#execution-order)
@@ -392,13 +392,13 @@ def generate_mock_git_log():
 
 ### Steps
 
-- [ ] **4.1 — MTTR** `get_mttr_by_module()` / `get_mttr_by_account()` — aggregate `resolve_time − raised_time` over `jira_logs` (the base signal for 4.2).
-- [ ] **4.2 — AI efficiency** `get_account_ai_efficiency()` — manual-hours-saved, MTTR-reduction %, AI-resolved ticket counts per account (reads `ai_tool_efficiency` + 4.1).
-- [ ] **4.3 — Jira pipeline** `get_jira_pipeline(project_id)` — ticket table (severity, status, raised/resolve, assigned_to, lifecycle stage) for the PM / TL views.
-- [ ] **4.4 — Telemetry** `get_telemetry(module_id)` — latest perf samples + associated incidents from `performance_data`.
-- [ ] **4.5 — AI-authored share** — extend `get_commit_comments` to surface `ai_generated_percentage` per commit for the commit-level tracking matrix.
-- [ ] **4.6 — Expose to the agent** — register the new functions as tools in `src/agent.py` (`_DISPATCH` + `TOOLS`) so the copilot can call them.
-- [ ] **4.7 — Contract check** — confirm every new return is JSON-serialisable (feeds both UI and agent).
+- [x] **4.1 — MTTR** `get_mttr_by_module()` / `get_mttr_by_account()` — `AVG(julianday(resolve_time) − julianday(raised_time))` over resolved `jira_logs`.
+- [x] **4.2 — AI efficiency** `get_account_ai_efficiency()` — manual-hours-saved, MTTR-reduction %, AI-resolved ticket counts per account (from `ai_tool_efficiency`) + computed MTTR.
+- [x] **4.3 — Jira pipeline** `get_jira_pipeline(project_id)` — ticket table (severity-ranked, status, raised/resolve, assignee, lifecycle stage, AI automation %, causing commit).
+- [x] **4.4 — Telemetry** `get_telemetry(module_id)` — perf samples (packet drop / latency / CPU + associated incidents) from `performance_data`.
+- [x] **4.5 — AI-authored share** — `get_commit_comments` now surfaces `ai_agent_used` + `ai_generated_pct` per commit.
+- [x] **4.6 — Expose to the agent** — `get_mttr`, `get_ai_efficiency`, `get_jira_pipeline`, `get_telemetry` registered in `agent.py` (`_DISPATCH` + `TOOLS`) + prompt.
+- [x] **4.7 — Contract check** — all new returns JSON-serialisable; verified against the DB.
 
 ---
 
@@ -412,11 +412,11 @@ def generate_mock_git_log():
 
 ### Steps
 
-- [ ] **5.1 — Unit Head** (`pages/01_unit_head.py`) — strategic/customer view: vertical → account → project drill-down, customer-status buckets, AI-tool-efficiency panel, customer-reported errors. Aggregates only.
-- [ ] **5.2 — Project Manager** (`pages/02_project_manager.py`) — delivery view: jira ticket pipeline (severity / status / lifecycle), commit-level tracking with AI-authored %, customer review table.
-- [ ] **5.3 — Team Lead** (`pages/03_team_lead.py`) — local workspace: task lifecycle, **real engineer names**, per-commit comments, the module's customer-issue → commit table. Scoped to the lead's own module(s).
-- [ ] **5.4 — Light scoping** — a small helper that filters each page's data to its slice (vertical / project / module). No auth tokens, no hard-fail — just the right data per view.
-- [ ] **5.5 — (optional) Agent boundary** — keep the `AURA.md` narrative: the Team Lead copilot only answers about its own module. Soft guard in `src/agent.py`. Skip if time-boxed.
+- [x] **5.1 — Unit Head** (`pages/01_unit_head.py`) — AI-tool-efficiency panel per client with a **data-derived account risk tier** (`get_account_risk_tiers`, shows the critical module); merged customer section: "Customer-reported errors" = Raised + Still-open (by severity) + Share donut (`get_customer_issue_status`). Aggregates only.
+- [x] **5.2 — Project Manager** (`pages/02_project_manager.py`) — delivery focus: **KPI row** (open / high-crit open / MTTR / build % / AI usage via `get_project_delivery_kpis`), **pipeline governance** charts (by status / lifecycle / severity), customer ticket pipeline table (`ai_usage_%`). Removed commit-wise/traceability/review-comment detail.
+- [x] **5.3 — Team Lead** (`pages/03_team_lead.py`) — added **Task overview** (jira tl-view: assignee, lifecycle, completion) + **Live telemetry** (`get_telemetry`). Already had real names + per-commit detail.
+- [x] **5.4 — Light scoping** — satisfied by the existing per-page selectors (Unit Head → vertical, PM → project, Team Lead → module); no separate helper needed.
+- [ ] **5.5 — (optional) Agent boundary** — skipped for the demo (RBAC/hashing dropped).
 
 ---
 

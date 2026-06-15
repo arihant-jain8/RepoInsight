@@ -183,6 +183,34 @@ def _t_describe_schema(**_):
             "relationships": rels}
 
 
+def _t_mttr(**_):
+    return {"by_module": analytics.get_mttr_by_module(),
+            "by_account": analytics.get_mttr_by_account()}
+
+
+def _t_ai_efficiency(**_):
+    return analytics.get_account_ai_efficiency()
+
+
+def _t_jira_pipeline(project_name: str = "", **_):
+    pid = None
+    if project_name:
+        p = _resolve_project(project_name)
+        if not p:
+            return {"error": f"Unknown project '{project_name}'.",
+                    "available": [x["name"] for x in analytics.list_projects()]}
+        pid = p["id"]
+    return analytics.get_jira_pipeline(pid)[:_MAX_ROWS]
+
+
+def _t_telemetry(module_name: str = "", **_):
+    m = _resolve_module(module_name)
+    if not m:
+        return {"error": f"Unknown module '{module_name}'.",
+                "available": [x["name"] for x in analytics.list_modules()]}
+    return analytics.get_telemetry(m["id"])
+
+
 _DISPATCH = {
     "list_modules": _t_list_modules,
     "list_projects": _t_list_projects,
@@ -195,6 +223,10 @@ _DISPATCH = {
     "trace_customer_issues": _t_trace_customer_issues,
     "get_team_members": _t_team_members,
     "get_metric_catalog": _t_metric_catalog,
+    "get_mttr": _t_mttr,
+    "get_ai_efficiency": _t_ai_efficiency,
+    "get_jira_pipeline": _t_jira_pipeline,
+    "get_telemetry": _t_telemetry,
     "describe_schema": _t_describe_schema,
     "run_sql": _t_run_sql,
 }
@@ -208,7 +240,8 @@ def _tool(name, desc, props=None, required=None):
                        "required": required or []}}}
 
 
-_MODULE_ARG = {"module_name": {"type": "string", "description": "Module name, e.g. 'Auth'"}}
+_MODULE_ARG = {"module_name": {"type": "string",
+                               "description": "Module name, e.g. 'RAN Packet Parser'"}}
 _PROJECT_ARG = {"project_name": {"type": "string",
                                  "description": "Project name; omit for org-wide"}}
 
@@ -237,6 +270,15 @@ TOOLS = [
           "(label, unit, direction, good/bad thresholds). Pass module_type to scope.",
           {"module_type": {"type": "string",
                            "description": "network | backend | frontend | ai"}}),
+    _tool("get_mttr", "Mean time to resolution (days) per module and per account, "
+          "from resolved jira tickets."),
+    _tool("get_ai_efficiency", "Per-account AI tooling efficiency: manual hours saved, "
+          "MTTR-reduction %, AI-resolved ticket count, plus computed MTTR (days)."),
+    _tool("get_jira_pipeline", "Jira ticket pipeline (ticket id, severity, status, lifecycle "
+          "stage, assignee, AI automation %, causing commit). Optionally scope to a project.",
+          _PROJECT_ARG),
+    _tool("get_telemetry", "Real-time telemetry samples for a module (packet drop rate, "
+          "latency, CPU utilisation, associated incidents).", _MODULE_ARG, ["module_name"]),
     _tool("describe_schema", "The real database structure: tables, columns, views and "
           "foreign-key relationships. Use for any question about what tables/columns "
           "exist or how the database is structured."),
