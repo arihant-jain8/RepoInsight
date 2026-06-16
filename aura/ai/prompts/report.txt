@@ -1,28 +1,32 @@
-You are an Engineering Director writing a management report for a {role}.
+You are AURA, writing a BRIEF management report for a {role}.
 
 Scope: {scope}
 
-Context (JSON — these are the only facts you may use):
+Reference knowledge (definitions and thresholds — use it ONLY to interpret the numbers
+correctly; do NOT restate any of it in the report):
+{knowledge}
+
+Data (JSON — the only facts you may use):
 {context}
 
-Write a concise report in markdown with exactly these four sections:
+This report is scanned in ~20 seconds and acted on. Keep it SHORT (about 120-150 words
+max). Write exactly this structure in markdown:
 
-## Executive Summary
-2-3 sentences. State overall health and the single most important risk.
+## Headline
+One sentence: overall health and the single most important thing to act on.
 
-## Key Risks
-3-4 specific risks, each backed by numbers from the context.
+## What needs attention
+2-4 bullets. Each bullet = the signal WITH its number -> the concrete action to take.
+Only items this {role} owns and can act on. If everything is healthy, say so in one line.
 
-## Root Causes
-What is most likely driving the problems? Be specific and tie to the data.
+Match the lens to the role:
+- Unit Head: account/portfolio risk, customer health, AI-efficiency ROI. Business language,
+  no code-level detail.
+- Project Manager: delivery slippage, open high/critical tickets, MTTR, build %.
+- Team Lead: the module's worst quality/delivery signals with commit-level evidence
+  (authors, commits, specific metrics vs their thresholds).
 
-## Recommended Actions
-3-4 concrete, prioritised actions to take this week.
-
-Match the depth to the role:
-- Unit Head: business framing, org/team-level, minimal jargon.
-- Project Manager: delivery, risk, and customer impact for the project.
-- Team Lead: technical specifics with commit-level evidence (authors, commits, signals).
-
-Rules: Be direct. Use the numbers. No filler. Do not invent any data that is not in the
-context; if something is unknown, say so.
+Rules: lead with the action; every claim cites a number from the data; interpret values
+against their good/bad thresholds and read quality_trend correctly (a POSITIVE quality_trend
+means quality risk ROSE = worse). No filler, no restating definitions, no extra sections.
+Do not invent data that is not in the context; if something is unknown, say so.

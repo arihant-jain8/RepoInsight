@@ -18,6 +18,7 @@ import httpx
 from aura.analytics import analytics
 from aura import config
 from aura.ai import charts
+from aura.ai import kb
 from aura.ai import llm_service
 
 MAX_STEPS = 6
@@ -196,6 +197,11 @@ def _t_team_improvement(**_):
     return analytics.get_team_improvement()
 
 
+def _t_get_reference(topic: str = "", **_):
+    """Return a domain knowledge-base topic (definitions, not live data)."""
+    return {"topic": topic, "reference": kb.read(topic)}
+
+
 def _t_jira_pipeline(project_name: str = "", **_):
     pid = None
     if project_name:
@@ -247,6 +253,7 @@ _DISPATCH = {
     "get_mttr": _t_mttr,
     "get_ai_efficiency": _t_ai_efficiency,
     "get_team_improvement": _t_team_improvement,
+    "get_reference": _t_get_reference,
     "get_jira_pipeline": _t_jira_pipeline,
     "get_telemetry": _t_telemetry,
     "make_chart": _t_make_chart,
@@ -302,6 +309,14 @@ TOOLS = [
           "the risk_delta (positive = improved/risk fell), and the driver component (code "
           "quality / build & integration / review collaboration) behind it. Ranked "
           "most-improved first. Use for 'who improved the most / by how much / based on what'."),
+    _tool("get_reference",
+          "Read a domain knowledge-base topic (DEFINITIONS, not live data). Consult it to "
+          "explain a metric or how risk is computed, to judge whether a value is good/bad "
+          "(thresholds), or to read a trend correctly. Topics:\n"
+          + "\n".join(f"- {t}: {d}" for t, d in kb.list_topics()),
+          {"topic": {"type": "string",
+                     "description": "one of: " + ", ".join(t for t, _ in kb.list_topics())}},
+          ["topic"]),
     _tool("get_jira_pipeline", "Jira ticket pipeline (ticket id, severity, status, lifecycle "
           "stage, assignee, AI automation %, causing commit). Optionally scope to a project.",
           _PROJECT_ARG),
