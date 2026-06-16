@@ -16,6 +16,7 @@ import httpx
 from aura.analytics import analytics
 from aura import config
 from aura.analytics import risk_engine
+from aura.ai import kb
 
 _CHAT_URL = f"{config.LLM_BASE_URL}/chat/completions"
 _MODELS_URL = f"{config.LLM_BASE_URL}/models"
@@ -145,7 +146,8 @@ def _org_context() -> dict:
 def _report_messages(role: str, scope: str, context: dict) -> list[dict]:
     """The chat messages for a report — single source for generators + benchmark."""
     prompt = _prompt("report.txt").format(
-        role=role, scope=scope, context=json.dumps(context, indent=2))
+        role=role, scope=scope, knowledge=kb.bundle(),
+        context=json.dumps(context, indent=2))
     return [{"role": "user", "content": prompt}]
 
 
@@ -186,7 +188,8 @@ def generate_org_report(role: str = "Unit Head") -> dict:
 
 def chat(user_message: str, history: list[dict] | None = None) -> dict:
     ctx = _org_context()
-    system = _prompt("copilot.txt").format(context=json.dumps(ctx, indent=2))
+    system = _prompt("copilot.txt").format(
+        knowledge=kb.bundle(), context=json.dumps(ctx, indent=2))
     messages = [{"role": "system", "content": system}]
     for m in (history or [])[-6:]:
         messages.append({"role": m["role"], "content": m["content"]})

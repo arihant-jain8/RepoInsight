@@ -18,6 +18,7 @@ import httpx
 from aura.analytics import analytics
 from aura import config
 from aura.ai import charts
+from aura.ai import kb
 from aura.ai import llm_service
 
 MAX_STEPS = 6
@@ -196,6 +197,11 @@ def _t_team_improvement(**_):
     return analytics.get_team_improvement()
 
 
+def _t_get_reference(topic: str = "", **_):
+    """Return a domain knowledge-base topic (definitions, not live data)."""
+    return {"topic": topic, "reference": kb.read(topic)}
+
+
 def _t_jira_pipeline(project_name: str = "", **_):
     pid = None
     if project_name:
@@ -247,6 +253,7 @@ _DISPATCH = {
     "get_mttr": _t_mttr,
     "get_ai_efficiency": _t_ai_efficiency,
     "get_team_improvement": _t_team_improvement,
+    "get_reference": _t_get_reference,
     "get_jira_pipeline": _t_jira_pipeline,
     "get_telemetry": _t_telemetry,
     "make_chart": _t_make_chart,
@@ -302,6 +309,14 @@ TOOLS = [
           "the risk_delta (positive = improved/risk fell), and the driver component (code "
           "quality / build & integration / review collaboration) behind it. Ranked "
           "most-improved first. Use for 'who improved the most / by how much / based on what'."),
+    _tool("get_reference",
+          "Read a domain knowledge-base topic (DEFINITIONS, not live data). Consult it to "
+          "explain a metric or how risk is computed, to judge whether a value is good/bad "
+          "(thresholds), or to read a trend correctly. Topics:\n"
+          + "\n".join(f"- {t}: {d}" for t, d in kb.list_topics()),
+          {"topic": {"type": "string",
+                     "description": "one of: " + ", ".join(t for t, _ in kb.list_topics())}},
+          ["topic"]),
     _tool("get_jira_pipeline", "Jira ticket pipeline (ticket id, severity, status, lifecycle "
           "stage, assignee, AI automation %, causing commit). Optionally scope to a project.",
           _PROJECT_ARG),
@@ -412,10 +427,12 @@ def _trace_entry(name: str, args: dict, result) -> dict:
 
 
 def agent_chat(message: str, history: list[dict] | None = None) -> dict:
-    """Tool-using chat. Returns {'text', 'source', 'trace', 'tokens', 'calls'}."""
+    """Tool-using chat. Returns {'text', 'source', 'trace', 'tokens', 'prompt_tokens',
+    'completion_tokens', 'calls', 'chart'} — token counts summed across the tool loop."""
     if not llm_service.is_available():
         res = llm_service.chat(message, history)
-        res.update({"trace": [], "tokens": 0, "calls": 0, "chart": None})
+        res.update({"trace": [], "tokens": 0, "prompt_tokens": 0,
+                    "completion_tokens": 0, "calls": 0, "chart": None})
         return res
 
     messages = [{"role": "system", "content": _prompt()}]
@@ -426,16 +443,20 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
 
     trace = []
     nudged = False
-    total_tokens = calls = 0
+    total_tokens = prompt_tokens = completion_tokens = calls = 0
     chart = None
     for _ in range(MAX_STEPS):
         msg, usage = _chat_raw(messages, tools=TOOLS)
         calls += 1
         total_tokens += usage.get("total_tokens", 0)
+        prompt_tokens += usage.get("prompt_tokens", 0)
+        completion_tokens += usage.get("completion_tokens", 0)
         if msg is None:  # transport error mid-loop -> fallback
             res = llm_service.chat(message, history)
-            res.update({"trace": trace, "tokens": total_tokens, "calls": calls,
-                        "chart": chart})
+            res.update({"trace": trace, "tokens": total_tokens,
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "calls": calls, "chart": chart})
             return res
 
         tool_calls = msg.get("tool_calls")
@@ -454,8 +475,10 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
                                  "database structure/schema, you may keep it as-is."})
                 continue
             return {"text": _scrub_sql(msg.get("content") or "") or "(no answer)",
-                    "source": "llm", "trace": trace,
-                    "tokens": total_tokens, "calls": calls, "chart": chart}
+                    "source": "llm", "trace": trace, "tokens": total_tokens,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "calls": calls, "chart": chart}
 
         messages.append({"role": "assistant", "content": msg.get("content") or "",
                          "tool_calls": tool_calls})
@@ -477,7 +500,10 @@ def agent_chat(message: str, history: list[dict] | None = None) -> dict:
                                           "content": "Answer now using the data above; do not call tools."}])
     calls += 1
     total_tokens += usage.get("total_tokens", 0)
+    prompt_tokens += usage.get("prompt_tokens", 0)
+    completion_tokens += usage.get("completion_tokens", 0)
     text = _scrub_sql(final.get("content") if final else "") or \
         "I gathered data but couldn't finalise an answer — try narrowing the question."
-    return {"text": text, "source": "llm", "trace": trace,
-            "tokens": total_tokens, "calls": calls, "chart": chart}
+    return {"text": text, "source": "llm", "trace": trace, "tokens": total_tokens,
+            "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
+            "calls": calls, "chart": chart}
