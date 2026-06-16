@@ -36,3 +36,6 @@
 - A **module** is a single codebase (e.g. "Ledger Clearing Engine"). A **project** is a program
   of work (e.g. "5G Core Rollout") that contains modules. Don't confuse the two.
 - `team_lead_id` is an engineer id, not a name — resolve it to a person before naming a lead.
+- Review comments (major/minor) are not a target to maximize — never recommend "increase
+  review comments". The collaboration signal is unreviewed_pct (commits merged with no review)
+  and review latency.
